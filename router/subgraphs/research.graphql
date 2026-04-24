@@ -1,0 +1,73 @@
+# Nexus event-driven subgraph for Cosmo Streams (EDFS over Redis).
+#
+# Strict EDFS mode: root fields must return entities. We model each stream item
+# as an entity wrapper carrying a JSON payload string. The frontend parses this
+# payload and maps it into app-native shapes.
+
+directive @edfs__redisSubscribe(
+  channels: [String!]!
+  providerId: String! = "default"
+) on FIELD_DEFINITION
+
+scalar DateTime
+extend type NodeAddedEvent @key(fields: "id", resolvable: false) {
+  id: ID! @external
+}
+
+extend type EdgeLinkedEvent @key(fields: "id", resolvable: false) {
+  id: ID! @external
+}
+
+extend type AgentStatusChangedEvent @key(fields: "id", resolvable: false) {
+  id: ID! @external
+}
+
+extend type CrawlLogEntry @key(fields: "id", resolvable: false) {
+  id: ID! @external
+}
+
+extend type TimelineEvent @key(fields: "id", resolvable: false) {
+  id: ID! @external
+}
+
+extend type SessionCollaboratorEvent @key(fields: "id", resolvable: false) {
+  id: ID! @external
+}
+
+type Subscription {
+  nodeAdded(sessionId: ID!): NodeAddedEvent!
+    @edfs__redisSubscribe(
+      channels: ["nexus:events:{{ args.sessionId }}:node"]
+      providerId: "nexus-redis"
+    )
+
+  edgeLinked(sessionId: ID!): EdgeLinkedEvent!
+    @edfs__redisSubscribe(
+      channels: ["nexus:events:{{ args.sessionId }}:edge"]
+      providerId: "nexus-redis"
+    )
+
+  agentStatusChanged(sessionId: ID!): AgentStatusChangedEvent!
+    @edfs__redisSubscribe(
+      channels: ["nexus:events:{{ args.sessionId }}:agent"]
+      providerId: "nexus-redis"
+    )
+
+  crawlLog(sessionId: ID!): CrawlLogEntry!
+    @edfs__redisSubscribe(
+      channels: ["nexus:events:{{ args.sessionId }}:log"]
+      providerId: "nexus-redis"
+    )
+
+  timelineEvent(sessionId: ID!): TimelineEvent!
+    @edfs__redisSubscribe(
+      channels: ["nexus:events:{{ args.sessionId }}:timeline"]
+      providerId: "nexus-redis"
+    )
+
+  collaboratorEvent(sessionId: ID!): SessionCollaboratorEvent!
+    @edfs__redisSubscribe(
+      channels: ["nexus:events:{{ args.sessionId }}:collaborator"]
+      providerId: "nexus-redis"
+    )
+}

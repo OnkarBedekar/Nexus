@@ -1,0 +1,67 @@
+# OS / Editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Logs
+*.log
+logs/
+
+# Environment files (keep examples)
+.env
+.env.*
+!.env.example
+!*.env.example
+
+# Python / backend
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+ENV/
+env/
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+.tox/
+.nox/
+.hypothesis/
+.ipynb_checkpoints/
+.python-version
+*.egg-info/
+*.egg
+.eggs/
+build/
+dist/
+site/
+pip-wheel-metadata/
+
+# Node / frontend + router
+**/node_modules/
+**/.npm/
+**/.pnpm-store/
+**/.yarn/
+**/.turbo/
+**/.cache/
+**/.vite/
+frontend/dist/
+frontend/tsconfig.tsbuildinfo
+
+# Router generated artifacts
+router/config.json
+router/graph.localhost.yaml
+
+# Local-only config
+*.local.yaml
+*.local.json
+config.local.json

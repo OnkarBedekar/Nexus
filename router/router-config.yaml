@@ -1,0 +1,30 @@
+version: "1"
+
+# Dev mode is enabled via the DEV_MODE env var in docker-compose so the Router
+# will happily run without a Cosmo Cloud connection and will pick up the local
+# execution config at EXECUTION_CONFIG_FILE_PATH.
+
+# CORS for the React dev server on :5173. Values come from docker-compose env.
+cors:
+  allow_origins:
+    - "*"
+  allow_credentials: false
+  allow_headers:
+    - "*"
+  allow_methods:
+    - GET
+    - PUT
+    - POST
+    - OPTIONS
+
+# Cosmo Streams (EDFS) Redis event provider. The ID "nexus-redis" must match
+# the providerId used in research.graphql.
+#
+# When run inside docker-compose, the Cosmo Router reaches Redis via the
+# service name "redis". Override REDIS_URL in .env for Upstash/remote Redis.
+events:
+  providers:
+    redis:
+      - id: nexus-redis
+        urls:
+          - "redis://redis:6379"

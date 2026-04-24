@@ -1,0 +1,65 @@
+services:
+  redis:
+    image: redis/redis-stack@sha256:5d5154123426693540ea6c1d9e638eae2bf2024879c839db6fcfdd7717e817c7
+    container_name: nexus-redis
+    ports:
+      - "6379:6379"   # Redis protocol (for Cosmo Router + redis-py)
+      - "8001:8001"   # RedisInsight UI
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  cosmo-router:
+    image: ghcr.io/wundergraph/cosmo/router@sha256:563efa2ebe23a8e2706f688e95934366d67f39dcd71d2d507411f605301ec034
+    container_name: nexus-cosmo-router
+    platform: linux/amd64
+    depends_on:
+      redis:
+        condition: service_healthy
+    ports:
+      - "3002:3002"
+    environment:
+      DEV_MODE: "true"
+      LISTEN_ADDR: "0.0.0.0:3002"
+      EXECUTION_CONFIG_FILE_PATH: "/config/config.json"
+      CONFIG_PATH: "/config/router-config.yaml"
+      CORS_ALLOW_ORIGINS: "*"
+    volumes:
+      - ./router/config.json:/config/config.json:ro
+      - ./router/router-config.yaml:/config/router-config.yaml:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  normalizer-worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.worker
+    image: nexus-normalizer-worker:chainguard
+    container_name: nexus-normalizer-worker
+    user: "65532:65532"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp
+    depends_on:
+      redis:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      REDIS_URL: redis://redis:6379
+      REDIS_NATIVE_PIPELINE: "1"
+      REDIS_RAW_STREAM: nexus:stream:raw_extract
+      REDIS_DLQ_STREAM: nexus:stream:dlq
+      REDIS_STREAM_GROUP: normalizer-group
+      REDIS_STREAM_CONSUMER: normalizer-docker
+
+volumes:
+  redis-data:

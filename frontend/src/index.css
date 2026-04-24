@@ -1,0 +1,524 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* =========================================================================
+   CYBERPUNK DESIGN SYSTEM
+   -------------------------------------------------------------------------
+   All reusable aesthetic primitives live here so components stay lean and
+   palette changes can be done in one place. Uses CSS variables so we can
+   flip entire themes without re-generating Tailwind output.
+   ========================================================================= */
+
+:root {
+  --cyber-accent: #00d4ff;
+  --cyber-accent-soft: rgba(0, 212, 255, 0.18);
+  --cyber-secondary: #ff00ff;
+  --cyber-tertiary: #00ff88;
+  --cyber-warn: #ffaa00;
+  --cyber-danger: #ff3366;
+  --cyber-void: #050509;
+  --cyber-panel: #0b0b14;
+  --cyber-panel-alt: #12121f;
+  --cyber-border: #1f1f33;
+  --cyber-border-bright: #2a2a4a;
+  --cyber-text: #e4e9f2;
+  --cyber-text-dim: #6b7286;
+  --cyber-chamfer: 10px;
+  --cyber-chamfer-sm: 6px;
+}
+
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    font-family:
+      "JetBrains Mono", "Fira Code", ui-monospace, "SFMono-Regular", Menlo,
+      Consolas, monospace;
+    font-feature-settings: "ss01", "ss02", "cv02", "cv03", "cv04", "cv11";
+    -webkit-font-smoothing: antialiased;
+    background-color: var(--cyber-void);
+    color: var(--cyber-text);
+    letter-spacing: 0.01em;
+    overflow: hidden;
+  }
+
+  /* Global scanline + vignette overlay — painted ABOVE the app but clicks
+     pass through. Keeps the whole UI feeling like it's behind CRT glass. */
+  body::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    z-index: 9999;
+    background: repeating-linear-gradient(
+      0deg,
+      transparent,
+      transparent 2px,
+      rgba(0, 0, 0, 0.18) 2px,
+      rgba(0, 0, 0, 0.18) 3px
+    );
+    mix-blend-mode: multiply;
+    opacity: 0.6;
+  }
+
+  body::after {
+    content: "";
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    z-index: 9998;
+    background: radial-gradient(
+      ellipse at center,
+      transparent 55%,
+      rgba(0, 0, 0, 0.45) 100%
+    );
+  }
+
+  ::selection {
+    background: var(--cyber-accent-soft);
+    color: var(--cyber-accent);
+    text-shadow: 0 0 6px var(--cyber-accent);
+  }
+
+  /* Typography baselines */
+  h1,
+  h2,
+  h3,
+  h4,
+  h5 {
+    font-family: "Orbitron", "Share Tech Mono", ui-monospace, monospace;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+
+  input,
+  textarea,
+  button {
+    font-family: inherit;
+  }
+
+  /* Focus ring — matches accent for the whole cyberpunk feel. */
+  :focus-visible {
+    outline: 2px solid var(--cyber-accent);
+    outline-offset: 2px;
+    box-shadow:
+      0 0 0 2px var(--cyber-void),
+      0 0 0 4px var(--cyber-accent),
+      0 0 18px var(--cyber-accent-soft);
+  }
+}
+
+@layer components {
+  /* =======================================================================
+     PANEL — the base container for every column / card.
+     Chamfered corners via clip-path (true hexagonal tech-panel feel),
+     neon edge on hover. Tiny scanline overlay via ::after.
+     ======================================================================= */
+  .panel {
+    position: relative;
+    background-color: var(--cyber-panel);
+    border: 1px solid var(--cyber-border);
+    clip-path: polygon(
+      0 var(--cyber-chamfer),
+      var(--cyber-chamfer) 0,
+      calc(100% - var(--cyber-chamfer)) 0,
+      100% var(--cyber-chamfer),
+      100% calc(100% - var(--cyber-chamfer)),
+      calc(100% - var(--cyber-chamfer)) 100%,
+      var(--cyber-chamfer) 100%,
+      0 calc(100% - var(--cyber-chamfer))
+    );
+    transition:
+      border-color 180ms ease,
+      box-shadow 180ms ease;
+  }
+
+  .panel::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    background: repeating-linear-gradient(
+      0deg,
+      transparent,
+      transparent 3px,
+      rgba(0, 212, 255, 0.025) 3px,
+      rgba(0, 212, 255, 0.025) 4px
+    );
+    opacity: 0.7;
+  }
+
+  .panel-sm {
+    clip-path: polygon(
+      0 var(--cyber-chamfer-sm),
+      var(--cyber-chamfer-sm) 0,
+      calc(100% - var(--cyber-chamfer-sm)) 0,
+      100% var(--cyber-chamfer-sm),
+      100% calc(100% - var(--cyber-chamfer-sm)),
+      calc(100% - var(--cyber-chamfer-sm)) 100%,
+      var(--cyber-chamfer-sm) 100%,
+      0 calc(100% - var(--cyber-chamfer-sm))
+    );
+  }
+
+  /* Holographic variant — translucent with outer neon glow, used for
+     overlays and floating HUD panels. */
+  .panel-holo {
+    background-color: rgba(18, 18, 31, 0.55);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    border: 1px solid rgba(0, 212, 255, 0.35);
+    box-shadow:
+      0 0 20px rgba(0, 212, 255, 0.15),
+      inset 0 1px 0 rgba(0, 212, 255, 0.1);
+  }
+
+  /* HUD bracket accents at the four corners of a container. Apply to a
+     `position: relative` parent to render `⌐¬` style corner brackets. */
+  .hud-corners::before,
+  .hud-corners::after,
+  .hud-corners > .hud-c-bl,
+  .hud-corners > .hud-c-br {
+    content: "";
+    position: absolute;
+    width: 10px;
+    height: 10px;
+    border-color: var(--cyber-accent);
+    pointer-events: none;
+  }
+  .hud-corners::before {
+    top: 4px;
+    left: 4px;
+    border-top: 1px solid;
+    border-left: 1px solid;
+  }
+  .hud-corners::after {
+    top: 4px;
+    right: 4px;
+    border-top: 1px solid;
+    border-right: 1px solid;
+  }
+  .hud-corners > .hud-c-bl {
+    bottom: 4px;
+    left: 4px;
+    border-bottom: 1px solid var(--cyber-accent);
+    border-left: 1px solid var(--cyber-accent);
+  }
+  .hud-corners > .hud-c-br {
+    bottom: 4px;
+    right: 4px;
+    border-bottom: 1px solid var(--cyber-accent);
+    border-right: 1px solid var(--cyber-accent);
+  }
+
+  /* =======================================================================
+     CHIP — compact status pill, now angular with uppercase hud-font.
+     ======================================================================= */
+  .chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 2px 8px;
+    font-family: "Share Tech Mono", "JetBrains Mono", monospace;
+    font-size: 10.5px;
+    font-weight: 500;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    border: 1px solid var(--cyber-border);
+    background: rgba(255, 255, 255, 0.015);
+    /* Minimal chamfer — reads as tech tag rather than rounded pill. */
+    clip-path: polygon(
+      0 3px,
+      3px 0,
+      calc(100% - 3px) 0,
+      100% 3px,
+      100% calc(100% - 3px),
+      calc(100% - 3px) 100%,
+      3px 100%,
+      0 calc(100% - 3px)
+    );
+    white-space: nowrap;
+  }
+
+  /* =======================================================================
+     BUTTON — transparent-with-neon-border default, fills + glows on hover.
+     ======================================================================= */
+  .btn {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 14px;
+    font-family: "Share Tech Mono", "JetBrains Mono", monospace;
+    font-size: 12px;
+    font-weight: 500;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    color: var(--cyber-text);
+    background: transparent;
+    border: 1px solid var(--cyber-border-bright);
+    clip-path: polygon(
+      0 5px,
+      5px 0,
+      calc(100% - 5px) 0,
+      100% 5px,
+      100% calc(100% - 5px),
+      calc(100% - 5px) 100%,
+      5px 100%,
+      0 calc(100% - 5px)
+    );
+    transition: all 160ms cubic-bezier(0.4, 0, 0.2, 1);
+    cursor: pointer;
+  }
+
+  .btn:hover:not(:disabled) {
+    border-color: var(--cyber-accent);
+    color: var(--cyber-accent);
+    box-shadow:
+      0 0 4px var(--cyber-accent),
+      0 0 14px rgba(0, 212, 255, 0.5),
+      inset 0 0 20px rgba(0, 212, 255, 0.08);
+    text-shadow: 0 0 6px rgba(0, 212, 255, 0.7);
+  }
+
+  .btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+
+  .btn-primary {
+    border-color: var(--cyber-accent);
+    color: var(--cyber-accent);
+    background: rgba(0, 212, 255, 0.06);
+    box-shadow:
+      0 0 3px rgba(0, 212, 255, 0.6),
+      inset 0 0 12px rgba(0, 212, 255, 0.06);
+  }
+
+  .btn-primary:hover:not(:disabled) {
+    background: var(--cyber-accent);
+    color: var(--cyber-void);
+    text-shadow: none;
+    box-shadow:
+      0 0 6px var(--cyber-accent),
+      0 0 24px rgba(0, 212, 255, 0.7);
+  }
+
+  .btn-danger {
+    border-color: var(--cyber-danger);
+    color: var(--cyber-danger);
+  }
+  .btn-danger:hover:not(:disabled) {
+    background: var(--cyber-danger);
+    color: var(--cyber-void);
+    box-shadow:
+      0 0 6px var(--cyber-danger),
+      0 0 20px rgba(255, 51, 102, 0.6);
+  }
+
+  /* =======================================================================
+     INPUT — terminal prompt aesthetic. Applies to inputs with .cyber-input
+     class so we don't globally override every HTML input.
+     ======================================================================= */
+  .cyber-input {
+    width: 100%;
+    padding: 10px 14px 10px 32px; /* extra left-pad for > prefix */
+    font-family: "JetBrains Mono", monospace;
+    font-size: 13px;
+    color: var(--cyber-text);
+    background: var(--cyber-panel-alt);
+    border: 1px solid var(--cyber-border-bright);
+    clip-path: polygon(
+      0 4px,
+      4px 0,
+      calc(100% - 4px) 0,
+      100% 4px,
+      100% calc(100% - 4px),
+      calc(100% - 4px) 100%,
+      4px 100%,
+      0 calc(100% - 4px)
+    );
+    transition: all 180ms ease;
+    caret-color: var(--cyber-accent);
+  }
+
+  .cyber-input::placeholder {
+    color: var(--cyber-text-dim);
+    font-style: normal;
+  }
+
+  .cyber-input:focus {
+    outline: none;
+    border-color: var(--cyber-accent);
+    box-shadow:
+      0 0 0 1px var(--cyber-accent),
+      0 0 14px rgba(0, 212, 255, 0.35),
+      inset 0 0 12px rgba(0, 212, 255, 0.06);
+    background: rgba(0, 212, 255, 0.02);
+  }
+
+  .cyber-input-wrap {
+    position: relative;
+  }
+
+  .cyber-input-wrap::before {
+    content: ">";
+    position: absolute;
+    left: 12px;
+    top: 50%;
+    transform: translateY(-50%);
+    color: var(--cyber-accent);
+    font-family: "JetBrains Mono", monospace;
+    font-size: 14px;
+    font-weight: 700;
+    pointer-events: none;
+    text-shadow: 0 0 6px rgba(0, 212, 255, 0.6);
+  }
+
+  /* =======================================================================
+     NEON TEXT — apply to any text-like element for the neon-sign effect.
+     ======================================================================= */
+  .neon-text {
+    text-shadow:
+      0 0 4px currentColor,
+      0 0 10px currentColor,
+      0 0 18px rgba(0, 212, 255, 0.5);
+  }
+
+  .neon-text-sm {
+    text-shadow:
+      0 0 4px currentColor,
+      0 0 8px rgba(0, 212, 255, 0.5);
+  }
+
+  .neon-border {
+    box-shadow:
+      0 0 4px var(--cyber-accent),
+      0 0 14px rgba(0, 212, 255, 0.5),
+      inset 0 0 12px rgba(0, 212, 255, 0.08);
+  }
+
+  /* =======================================================================
+     GLITCH TITLE — chromatic aberration RGB-split on the hero NEXUS word.
+     Uses a data-text attribute so the ::before / ::after layers can read
+     the same string without duplicating markup.
+     ======================================================================= */
+  .cyber-glitch {
+    position: relative;
+    display: inline-block;
+    color: var(--cyber-text);
+    animation: glitch-skew 7s infinite;
+  }
+
+  .cyber-glitch::before,
+  .cyber-glitch::after {
+    content: attr(data-text);
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    overflow: hidden;
+    pointer-events: none;
+  }
+
+  .cyber-glitch::before {
+    left: 2px;
+    text-shadow: -2px 0 var(--cyber-secondary);
+    clip-path: polygon(0 0, 100% 0, 100% 45%, 0 45%);
+    animation: glitch-skew 4s infinite reverse;
+  }
+
+  .cyber-glitch::after {
+    left: -2px;
+    text-shadow: -2px 0 var(--cyber-accent);
+    clip-path: polygon(0 55%, 100% 55%, 100% 100%, 0 100%);
+    animation: glitch-skew 5s infinite;
+  }
+
+  /* =======================================================================
+     DECORATIVE — background textures components can opt into.
+     ======================================================================= */
+  .cyber-grid-bg {
+    background-image:
+      linear-gradient(rgba(0, 212, 255, 0.04) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(0, 212, 255, 0.04) 1px, transparent 1px);
+    background-size: 50px 50px;
+  }
+
+  .cyber-scanlines-bg {
+    background: repeating-linear-gradient(
+      0deg,
+      transparent,
+      transparent 2px,
+      rgba(0, 0, 0, 0.3) 2px,
+      rgba(0, 0, 0, 0.3) 3px
+    );
+  }
+
+  /* Terminal traffic-light dots — for card headers that want to look like
+     a terminal window chrome. */
+  .cyber-traffic-lights {
+    display: inline-flex;
+    gap: 6px;
+  }
+  .cyber-traffic-lights > span {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--cyber-border-bright);
+    box-shadow: 0 0 4px currentColor;
+  }
+  .cyber-traffic-lights > span:nth-child(1) {
+    background: var(--cyber-danger);
+  }
+  .cyber-traffic-lights > span:nth-child(2) {
+    background: var(--cyber-warn);
+  }
+  .cyber-traffic-lights > span:nth-child(3) {
+    background: var(--cyber-tertiary);
+  }
+
+  /* =======================================================================
+     SCROLLBAR — minimal cyber-styled.
+     ======================================================================= */
+  .scrollbar-thin {
+    scrollbar-width: thin;
+    scrollbar-color: var(--cyber-border-bright) transparent;
+  }
+  .scrollbar-thin::-webkit-scrollbar {
+    height: 6px;
+    width: 6px;
+  }
+  .scrollbar-thin::-webkit-scrollbar-thumb {
+    background: var(--cyber-border-bright);
+  }
+  .scrollbar-thin::-webkit-scrollbar-thumb:hover {
+    background: var(--cyber-accent);
+    box-shadow: 0 0 6px var(--cyber-accent);
+  }
+}
+
+/* =========================================================================
+   Reduced motion — kill infinite animations but keep the static chromatic
+   aberration (::before / ::after layers are still positioned, just not
+   animated).
+   ========================================================================= */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+
+  body::before,
+  body::after {
+    animation: none !important;
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "name": "nexus-router",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Cosmo Router config for Nexus. Holds the event-driven subgraph schema and the wgc compose pipeline.",
+  "scripts": {
+    "compose": "wgc router compose --input graph.localhost.yaml --out config.json",
+    "compose:watch": "nodemon --watch subgraphs --ext graphql --exec 'npm run compose'"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.7",
+    "wgc": "^0.114.2"
+  }
+}

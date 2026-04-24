@@ -1,0 +1,27 @@
+type Query {
+  _schemaVersion: String!
+}
+
+type NodeAddedEvent @key(fields: "id") {
+  id: ID!
+}
+
+type EdgeLinkedEvent @key(fields: "id") {
+  id: ID!
+}
+
+type AgentStatusChangedEvent @key(fields: "id") {
+  id: ID!
+}
+
+type CrawlLogEntry @key(fields: "id") {
+  id: ID!
+}
+
+type TimelineEvent @key(fields: "id") {
+  id: ID!
+}
+
+type SessionCollaboratorEvent @key(fields: "id") {
+  id: ID!
+}
