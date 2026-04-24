@@ -2,34 +2,111 @@
 
 > Live knowledge-graph research cockpit for the "Ship to Prod - Agentic Engineering" hackathon, San Francisco.
 
-A user types a topic. A TinyFish web agent autonomously browses the live web while a React UI renders a D3 force-directed graph that assembles itself node-by-node in real time. Sponsors: **TinyFish** (web agent) + **WunderGraph Cosmo** (real-time GraphQL federation via EDFS over Redis) + **Redis** (streams + normalization + context + timeline).
+A user types a topic. A **TinyFish** web agent autonomously browses the live web while a React UI renders a D3 force-directed graph that assembles itself node-by-node in real time. **Redis** is the spine: durable extraction pipeline, semantic context, session memory, and realtime fanout. **WunderGraph Cosmo** turns those Redis-backed events into GraphQL subscriptions so every connected client stays in sync without a custom WebSocket service.
+
+---
+
+## Sponsors: what we use and what is unique
+
+Below is how each sponsor product shows up in Nexus—not a generic integration list, but the **specific capabilities** we leaned on.
+
+### TinyFish — agent runtime and structured extraction
+
+| How we use it | Where |
+| --- | --- |
+| **`AsyncTinyFish`** client and **`agent.stream(...)`** event loop | `backend/app/tinyfish_runner.py` |
+| **Live preview** from stream events (`STREAMING_URL` / streaming URL payload) | Left panel + expanded modal in the UI |
+| **Schema-guided extraction** (`output_schema` / `NEXUS_OUTPUT_SCHEMA`) so the agent returns normalized paper/entity shapes | Same runner + schema constants |
+| **Mock / live switch** for full-stack demos without API spend | `run_agent_for_session(...)`, `backend/app/mock_stream.py` |
+
+**What is unique here**
+
+- We avoid one-off scrapers per site: the agent handles navigation and extraction behind one contract (stream + schema).
+- **One streaming URL per run** drives the iframe preview (not a screenshot API per page); the UI treats that as the “live trust surface” for the booth.
+- **Two-phase live** (when configured): discovery pass (`discover_web_urls` in `backend/app/discovery.py`) prepends the user seed and dedupes URLs before extraction—so the graph starts from the chosen page first, then expands.
+- **`output_schema`** is authored as a JSON Schema **subset** TinyFish accepts (no `oneOf`, no `additionalProperties`, no `const`; use `anyOf` and `nullable: true`). See “Notable deviations” below.
+
+**Research angle**
+
+- Academic-mode flags bias toward arXiv, Semantic Scholar, PubMed, Scholar, lab pages; bounded citation traversal (references + cited-by) feeds the graph without unbounded crawl.
+
+---
+
+### Redis — streams, pub/sub, Bloom, search/vectors, and caching
+
+We use **Redis Stack** in Docker (`redis/redis-stack` in `docker-compose.yml`) so Bloom and RediSearch/vector features are available beside vanilla commands.
+
+| Capability | How Nexus uses it | Code / keys |
+| --- | --- | --- |
+| **Pub/Sub fanout** | Per-session channels for nodes, edges, agent status, crawl logs, timeline, collaborators | `nexus:events:{sessionId}:*` — `backend/app/redis_client.py` |
+| **Streams + consumer groups** | Raw extraction enqueued from the agent path; normalizer worker consumes with acks; DLQ stream for failures | `nexus:stream:raw_extract`, `nexus:stream:dlq` — `redis_client.py`, `backend/app/workers/normalizer.py` |
+| **Bloom dedupe** | URL visit dedupe with **`BF.ADD`**; automatic **set fallback** if Bloom module is unavailable | `nexus:visited:{sessionId}` — see comments in `redis_client.py` |
+| **RediSearch + vectors** | `FT.CREATE` with **HNSW**; **KNN** `FT.SEARCH` scoped by session for semantic context over canonical docs | `backend/app/context_engine.py` + fallbacks in `redis_client.py` |
+| **Caching** | Embedding cache + context-query cache (versioned) to avoid recomputing hot paths | `context_engine.py`, version bump logic in `redis_client.py` |
+
+**What is unique here**
+
+- **Single product** carries: realtime UI events, **durable** pipeline (streams), **probabilistic** dedupe (Bloom), **vector** retrieval, and **HTTP-friendly** replay (timeline / session keys)—so Cosmo and FastAPI both read the same backbone.
+- **Honest performance note**: caches speed repeated context lookups; a full new topic run still waits on real agent browsing unless mock mode is on.
+
+Operator-level verification commands live in [SPONSOR_USAGE_DETAILED.md](SPONSOR_USAGE_DETAILED.md) (Pub/Sub channels, `XLEN`, consumer groups, `FT._LIST`, vector key patterns).
+
+---
+
+### WunderGraph Cosmo — GraphQL realtime without a subscription microservice
+
+| How we use it | Where |
+| --- | --- |
+| **Cosmo Router** as the GraphQL gateway | Docker service `cosmo-router` in `docker-compose.yml` |
+| **EDFS**: Redis-backed subscriptions via **`@edfs__redisSubscribe`** | `router/subgraphs/research.graphql` (and related base schema) |
+| **Composition** | `wgc router compose` — `cd router && npm run compose` |
+| **Frontend SSE** | `graphql-sse` + **urql** with `Accept: text/event-stream` | `frontend/src/api/graphqlClient.ts`, `subscriptions.ts`, `useSessionSubscriptions.ts` |
+
+**What is unique here**
+
+- Subscriptions are **declarative in GraphQL schema**: the Router subscribes to Redis channels directly—**no Node subscription server** in the hot path.
+- Same session updates (e.g. `nodeAdded`, `edgeLinked`, `agentStatusChanged`, `crawlLog`, `collaboratorEvent`) reach **all** browsers subscribed through one gateway.
+
+**Boundary**
+
+- We use Cosmo **strongly for realtime subscriptions** (EDFS over Redis). We are not yet exercising deeper Cosmo policy/hook workflows end-to-end.
+
+---
+
+### Supply-chain and runtime hardening (images we depend on)
+
+| Piece | What we did |
+| --- | --- |
+| **Pinned digests** | `redis/redis-stack` and `ghcr.io/wundergraph/cosmo/router` use immutable image SHA references in `docker-compose.yml` |
+| **Chainguard-style worker** | Normalizer worker built from `backend/Dockerfile.worker` (`nexus-normalizer-worker:chainguard`), runs **non-root**, **read-only** rootfs, **dropped caps**, **`no-new-privileges`**, tmpfs for `/tmp` |
+| **CI** | Container scanning (e.g. Trivy) in `.github/workflows/container-security.yml` |
+
+---
+
+## End-to-end sponsor flow (one paragraph)
+
+`POST /sessions` starts a session → **TinyFish** streams browsing + completion → FastAPI **publishes** to Redis Pub/Sub and **XADD**s raw payloads to a Redis **Stream** → the **normalizer worker** reads the group, builds entities/edges, updates canonical store (and **vectors** when enabled) → more **PUBLISH** events → **Cosmo** maps Redis channels to GraphQL subscriptions → the React app updates the **D3** graph, panels, logs, and final-report inputs in lockstep.
+
+---
 
 ## PhD research positioning
 
-Nexus is designed for research pain points that common literature tools do not solve well:
+Nexus targets research pain points that typical literature tools handle poorly:
 
 - citation rabbit holes that lose context
 - static citation graphs that do not keep discovering live
 - no continuity across sessions
-- manual synthesis of related papers
-- advisor meetings that require a clear narrative, not a raw paper list
-
-### Sponsor features used for this use case
-
-- **TinyFish**: academic-source targeting (arXiv, Semantic Scholar, PubMed, Google Scholar, lab pages), realtime `agent.stream`, `output_schema`, and citation-chain traversal (references + cited-by expansion).
-- **Redis**: Redis Streams for normalization pipeline, dedupe (`BF.ADD`), replayable session memory (`ZADD`), realtime fanout (`PUBLISH`), and context retrieval over canonical docs.
-- **WunderGraph Cosmo**: EDFS subscriptions over Redis for collaborative live sessions where multiple clients follow the same research graph.
-
-### Sponsor-to-sponsor flow
-
-`Query -> TinyFish extraction -> Redis stream normalization worker -> Redis canonical/context store + pub/sub -> Cosmo realtime subscriptions -> shared graph across collaborators`
+- manual synthesis across related papers
+- advisor meetings that need a narrative, not a raw paper list
 
 ### New API capabilities (implemented)
 
 - `POST /sessions` accepts optional `collaborators` and `rehydrateFromSessionId`.
 - `GET /sessions/{session_id}/rehydrate` returns canonical papers seen in that session.
 - `POST /sessions/{session_id}/collaborators/{name}` adds a collaborator and emits a live event.
-- GraphQL subscription `collaboratorEvent(sessionId: ID!)` streams join/presence updates through Cosmo EDFS.
+- GraphQL subscription `collaboratorEvent(sessionId: ID!)` streams join/presence through Cosmo EDFS.
+
+---
 
 ## Architecture
 
@@ -42,7 +119,7 @@ FastAPI (:8000)   Cosmo Router (:3002, Go binary, Docker)
      |                    |
      |  async agent loop  | SUBSCRIBE redis channels
      v                    v
-TinyFish Agent API  <--- Redis (:6379, with RedisBloom) ---> FastAPI publishers
+TinyFish Agent API  <--- Redis (:6379, Redis Stack) ---> FastAPI publishers
      |                    ^
      | run-sse stream     | XREADGROUP by normalizer worker
      v                    |
@@ -50,7 +127,21 @@ TinyFish Agent API  <--- Redis (:6379, with RedisBloom) ---> FastAPI publishers
  (iframe in UI)
 ```
 
-The Cosmo "event-driven subgraph" is **just a schema file** (`router/subgraphs/research.graphql`) with `@edfs__redisSubscribe` directives. There is no subscription server to run - the Router connects directly to Redis and fans out to SSE/WS clients.
+The Cosmo “event-driven subgraph” is **a schema file** with `@edfs__redisSubscribe`. The Router connects to Redis and fans out to SSE/WebSocket clients.
+
+---
+
+## Quick sponsor → file map
+
+| Sponsor | Primary locations | Demo signal |
+| --- | --- | --- |
+| **TinyFish** | `tinyfish_runner.py`, `mock_stream.py`, `discovery.py` | Live iframe; streaming logs; structured completion enqueued |
+| **Redis** | `redis_client.py`, `workers/normalizer.py`, `context_engine.py` | `MONITOR` / `XLEN` / Pub/Sub activity during a run |
+| **WunderGraph Cosmo** | `router/subgraphs/*.graphql`, `router/config.json`, `frontend/src/api/graphqlClient.ts` | `/graphql` subscriptions firing `nodeAdded`, `collaboratorEvent`, etc. |
+
+More detailed verification steps: [SPONSOR_USAGE_DETAILED.md](SPONSOR_USAGE_DETAILED.md).
+
+---
 
 ## Prerequisites
 
@@ -123,14 +214,6 @@ These flags bias TinyFish toward academic sources, extract canonical paper field
 ## Hackathon day
 
 Follow [HACKATHON_DAY.md](HACKATHON_DAY.md) top-to-bottom on the day of the event. It covers booth questions, smoke tests, the 3-minute demo script, and troubleshooting.
-
-## Sponsor integration map
-
-| Sponsor | Where it lives | Demo proof |
-|---|---|---|
-| **TinyFish** | `backend/app/tinyfish_runner.py` drives `AsyncTinyFish.agent.stream`. Live browser iframe in `AgentPanel.tsx` uses the `streaming_url` SSE event. Structured paper extraction via `output_schema` and citation-chain hints. | Live iframe; `NEXUS_OUTPUT_SCHEMA` in code |
-| **WunderGraph Cosmo** | `router/subgraphs/research.graphql` (zero-code event-driven subgraph with `@edfs__redisSubscribe`). Includes `collaboratorEvent` realtime stream. Router in Docker. | `/graphql` endpoint, SSE trace of `nodeAdded` and `collaboratorEvent` |
-| **Redis** | `backend/app/redis_client.py` uses Streams (`XADD`/`XREADGROUP`) for normalization jobs, `BF.ADD` for URL dedup, `ZADD` for timeline, `PUBLISH` for realtime events, and canonical/context keys for cross-session reuse. Local Docker Redis is the default runtime. | `redis-cli MONITOR` + stream depth (`XLEN`) during demo |
 
 ## Notable deviations from `Project Details.md`
 
