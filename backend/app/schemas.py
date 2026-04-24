@@ -174,6 +174,14 @@ class ResearchSession(BaseModel):
     runId: str | None = None
     streamingUrl: str | None = None
     collaborators: list[str] = Field(default_factory=list)
+    # Two-phase: discover URLs first, then run the agent per URL (faster, bounded work).
+    useTwoPhase: bool = True
+    maxDiscoverUrls: int = 12
+    activePhase: str | None = None
+    # "discovering" | "extracting" | "complete"
+    discoveredUrls: list[str] = Field(default_factory=list)
+    currentExtractionIndex: int = 0
+    extractionUrlCount: int = 0
 
 
 # --- Request / response shapes for the REST API ---
@@ -187,6 +195,11 @@ class StartSessionRequest(BaseModel):
     )
     collaborators: list[str] = Field(default_factory=list)
     rehydrateFromSessionId: str | None = None
+    useTwoPhase: bool = Field(
+        default=True,
+        description="If true, discover a bounded set of source URLs, then run the agent on each. If false, legacy single-run behavior.",
+    )
+    maxDiscoverUrls: int = Field(12, ge=1, le=25, description="Max URLs from phase-1 discovery")
 
 
 class SessionCollaboratorEvent(BaseModel):

@@ -1,8 +1,11 @@
+import { useEffect } from "react";
+import { getSession } from "../api/rest";
 import { useSessionSubscriptions } from "../hooks/useSessionSubscriptions";
 import { useNexusStore } from "../store/nexus";
 import { BottomBar } from "./layout/BottomBar";
 import { Header } from "./layout/Header";
 import { AgentPanel } from "./panels/AgentPanel";
+import { FinalReportModal } from "./panels/FinalReportModal";
 import { GraphPanel } from "./panels/GraphPanel";
 import { NodeDetailPanel } from "./panels/NodeDetailPanel";
 import { SourcePreviewDrawer } from "./panels/SourcePreviewDrawer";
@@ -14,9 +17,20 @@ interface Props {
 
 export function SessionCockpit({ onReset }: Props) {
   const session = useNexusStore((s) => s.session);
+  const setSession = useNexusStore((s) => s.setSession);
   const setPreviewExpanded = useNexusStore((s) => s.setPreviewExpanded);
 
   useSessionSubscriptions(session?.id ?? null);
+
+  useEffect(() => {
+    if (!session?.id || session.status === "complete") return;
+    const t = window.setInterval(() => {
+      getSession(session.id)
+        .then(setSession)
+        .catch(() => {});
+    }, 4000);
+    return () => clearInterval(t);
+  }, [session?.id, session?.status, setSession]);
 
   return (
     <div className="h-screen flex flex-col overflow-hidden bg-cyber-void relative">
@@ -34,6 +48,7 @@ export function SessionCockpit({ onReset }: Props) {
           <NodeDetailPanel />
         </div>
         <LivePreviewModal />
+        <FinalReportModal />
         <SourcePreviewDrawer />
       </main>
       <BottomBar />

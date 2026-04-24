@@ -1,83 +1,15 @@
 import { useNexusStore } from "../../store/nexus";
 import { NODE_COLOR } from "../graph/colors";
 import type { Entity } from "../../types/schema";
-import { getRelatedContext, getSessionContext } from "../../api/rest";
-import { useEffect, useState } from "react";
 
 export function NodeDetailPanel() {
   const selectedId = useNexusStore((s) => s.selectedNodeId);
   const nodes = useNexusStore((s) => s.nodes);
   const openSourcePreview = useNexusStore((s) => s.openSourcePreview);
-  const session = useNexusStore((s) => s.session);
-  const reportRequestNonce = useNexusStore((s) => s.reportRequestNonce);
-  const [contextHints, setContextHints] = useState<Array<Record<string, unknown>>>([]);
-  const [relatedContext, setRelatedContext] = useState<Array<Record<string, unknown>>>([]);
-  const [report, setReport] = useState<string>("");
-  const [reportLoading, setReportLoading] = useState(false);
-  const [reportError, setReportError] = useState<string | null>(null);
   const totalNodes = nodes.size;
 
   const selectedEntity = selectedId ? nodes.get(selectedId) : null;
   const reportEntity = selectedEntity ?? bestReportEntity(nodes);
-
-  useEffect(() => {
-    if (!session?.id || !reportEntity?.name) {
-      setContextHints([]);
-      return;
-    }
-    getSessionContext(session.id, reportEntity.name)
-      .then((res) => setContextHints(res.results.slice(0, 3)))
-      .catch(() => setContextHints([]));
-  }, [session?.id, reportEntity?.name]);
-
-  useEffect(() => {
-    if (!session?.id || !reportEntity) {
-      setRelatedContext([]);
-      return;
-    }
-    getRelatedContext(session.id)
-      .then((res) => setRelatedContext(res.results.slice(0, 4)))
-      .catch(() => setRelatedContext([]));
-  }, [session?.id, reportEntity?.id]);
-
-  useEffect(() => {
-    if (!reportRequestNonce || !reportEntity) return;
-    let cancelled = false;
-    (async () => {
-      setReportLoading(true);
-      setReportError(null);
-      try {
-        const liveContext: Array<Record<string, unknown>> = [];
-        const related: Array<Record<string, unknown>> = [];
-        if (session?.id) {
-          const [contextRes, relatedRes] = await Promise.allSettled([
-            getSessionContext(session.id, reportEntity.name),
-            getRelatedContext(session.id),
-          ]);
-          if (contextRes.status === "fulfilled") liveContext.push(...contextRes.value.results.slice(0, 4));
-          if (relatedRes.status === "fulfilled") related.push(...relatedRes.value.results.slice(0, 4));
-        }
-        const nextReport = buildFinalReport({
-          entity: reportEntity,
-          contextHints: liveContext,
-          relatedContext: related.length > 0 ? related : relatedContext,
-        });
-        if (!cancelled) {
-          setReport(nextReport);
-          if (!nextReport.trim()) setReportError("Could not assemble report content yet.");
-        }
-      } catch (err) {
-        if (!cancelled) {
-          setReportError(err instanceof Error ? err.message : "failed to generate report");
-        }
-      } finally {
-        if (!cancelled) setReportLoading(false);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [reportRequestNonce, reportEntity, session?.id, relatedContext]);
 
   if (!reportEntity) {
     return (
@@ -151,14 +83,6 @@ export function NodeDetailPanel() {
       </div>
 
       <div className="flex-1 overflow-y-auto scrollbar-thin">
-        {reportLoading && (
-          <div className="p-4 text-[11px] font-mono text-cyber-textDim">
-            Generating final report...
-          </div>
-        )}
-        {reportError && (
-          <div className="p-4 text-[11px] font-mono text-cyber-danger">{reportError}</div>
-        )}
         {reportEntity.claims.length > 0 && (
           <section className="p-4 border-b border-cyber-border">
             <SectionLabel text="Findings" count={reportEntity.claims.length} />
@@ -238,23 +162,6 @@ export function NodeDetailPanel() {
           </section>
         )}
 
-        {report && (
-          <section className="p-4 border-t border-cyber-border">
-            <SectionLabel text="Final Report" />
-            <pre className="text-[11px] whitespace-pre-wrap font-mono text-cyber-text leading-relaxed bg-cyber-panelAlt border border-cyber-border p-2.5">
-              {report}
-            </pre>
-            <div className="mt-2 flex gap-2">
-              <button
-                type="button"
-                className="btn !px-2 !py-1 text-[10px]"
-                onClick={() => navigator.clipboard.writeText(report).catch(() => {})}
-              >
-                Copy report
-              </button>
-            </div>
-          </section>
-        )}
       </div>
     </aside>
   );
@@ -305,64 +212,6 @@ function bestReportEntity(nodes: Map<string, Entity>): Entity | null {
     return scoreB - scoreA;
   });
   return candidates[0] ?? null;
-}
-
-function buildFinalReport({
-  entity,
-  contextHints,
-  relatedContext,
-}: {
-  entity: Entity;
-  contextHints: Array<Record<string, unknown>>;
-  relatedContext: Array<Record<string, unknown>>;
-}): string {
-  const topFindings = entity.claims.slice(0, 5);
-  const strongFindings = filterSignalClaims(topFindings);
-  const topSources = entity.sources.slice(0, 5);
-  const context = [...contextHints, ...relatedContext].slice(0, 4);
-
-  const lines: string[] = [];
-  lines.push(`# Final Research Note: ${entity.name}`);
-  lines.push("");
-  lines.push(`Confidence: ${Math.round(entity.confidence * 100)}%`);
-  lines.push(`Evidence base: ${entity.claims.length} findings from ${entity.sources.length} sources`);
-  lines.push("");
-  lines.push("## Key findings");
-  if (strongFindings.length === 0) {
-    lines.push("- No structured findings extracted yet.");
-  } else {
-    for (const finding of strongFindings) {
-      lines.push(`- ${finding}`);
-    }
-  }
-  lines.push("");
-  lines.push("## Source-backed evidence");
-  if (topSources.length === 0) {
-    lines.push("- No source links available yet.");
-  } else {
-    for (const source of topSources) {
-      let label = source.title?.trim() || "Untitled source";
-      const lower = label.toLowerCase();
-      if (lower.startsWith("http://") || lower.startsWith("https://")) {
-        try {
-          label = new URL(source.url).hostname;
-        } catch {
-          label = "Source";
-        }
-      }
-      lines.push(`- ${label}: ${source.url}`);
-    }
-  }
-  if (context.length > 0) {
-    lines.push("");
-    lines.push("## Related semantic context");
-    for (const item of context) {
-      const title =
-        (item.title as string) || (item.paperId as string) || "Related context item";
-      lines.push(`- ${title}`);
-    }
-  }
-  return lines.join("\n");
 }
 
 function relativeTime(iso: string): string {

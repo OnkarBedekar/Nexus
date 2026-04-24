@@ -8,7 +8,7 @@ interface HeaderProps {
 export function Header({ onOpenPreview, onReset }: HeaderProps) {
   const session = useNexusStore((s) => s.session);
   const agent = useNexusStore((s) => s.agentStatus);
-  const requestFinalReport = useNexusStore((s) => s.requestFinalReport);
+  const setFinalReportOpen = useNexusStore((s) => s.setFinalReportOpen);
   const canGenerateReport = Boolean(session && (agent?.state === "done" || session.status === "complete"));
 
   return (
@@ -75,7 +75,7 @@ export function Header({ onOpenPreview, onReset }: HeaderProps) {
         {canGenerateReport ? (
           <button
             type="button"
-            onClick={requestFinalReport}
+            onClick={() => setFinalReportOpen(true)}
             className="btn btn-primary"
           >
             Generate Final Report

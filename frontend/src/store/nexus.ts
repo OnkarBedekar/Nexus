@@ -48,9 +48,9 @@ interface NexusStore {
   isPreviewExpanded: boolean;
   setPreviewExpanded: (expanded: boolean) => void;
 
-  // --- Final report trigger ---
-  reportRequestNonce: number;
-  requestFinalReport: () => void;
+  // --- Final report modal ---
+  isFinalReportOpen: boolean;
+  setFinalReportOpen: (open: boolean) => void;
 }
 
 export const useNexusStore = create<NexusStore>((set) => ({
@@ -101,7 +101,13 @@ export const useNexusStore = create<NexusStore>((set) => ({
       edges.set(rel.id, rel);
       return { edges };
     }),
-  clearGraph: () => set({ nodes: new Map(), edges: new Map(), selectedNodeId: null }),
+  clearGraph: () =>
+    set({
+      nodes: new Map(),
+      edges: new Map(),
+      selectedNodeId: null,
+      isFinalReportOpen: false,
+    }),
 
   selectedNodeId: null,
   selectNode: (selectedNodeId) => set({ selectedNodeId }),
@@ -129,9 +135,8 @@ export const useNexusStore = create<NexusStore>((set) => ({
   isPreviewExpanded: false,
   setPreviewExpanded: (isPreviewExpanded) => set({ isPreviewExpanded }),
 
-  reportRequestNonce: 0,
-  requestFinalReport: () =>
-    set((s) => ({ reportRequestNonce: s.reportRequestNonce + 1 })),
+  isFinalReportOpen: false,
+  setFinalReportOpen: (isFinalReportOpen) => set({ isFinalReportOpen }),
 }));
 
 function mergeSourcesBy(

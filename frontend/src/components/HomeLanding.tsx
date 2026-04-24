@@ -19,6 +19,8 @@ interface Props {
 export function HomeLanding({ onStarted }: Props) {
   const [topic, setTopic] = useState("AI chip supply chain");
   const [seedUrl, setSeedUrl] = useState("");
+  const [useTwoPhase, setUseTwoPhase] = useState(true);
+  const [maxDiscoverUrls, setMaxDiscoverUrls] = useState(12);
   const [collaborators, setCollaborators] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -36,6 +38,8 @@ export function HomeLanding({ onStarted }: Props) {
           .split(",")
           .map((name) => name.trim())
           .filter(Boolean),
+        useTwoPhase,
+        maxDiscoverUrls,
       });
       onStarted(session);
     } catch (e) {
@@ -183,13 +187,44 @@ export function HomeLanding({ onStarted }: Props) {
             ))}
           </div>
 
+          <div className="flex flex-col sm:flex-row sm:items-end gap-3">
+            <label className="flex items-center gap-2 cursor-pointer select-none text-sm font-mono text-cyber-text">
+              <input
+                type="checkbox"
+                className="accent-cyber-accent w-3.5 h-3.5"
+                checked={useTwoPhase}
+                onChange={(e) => setUseTwoPhase(e.target.checked)}
+              />
+              <span>Two-phase: search sources first, then run agent on each (recommended)</span>
+            </label>
+            <div className="w-full sm:min-w-[5.5rem] sm:w-44">
+              <Field label="Max source URLs">
+                <div className="cyber-input-wrap cyber-input-wrap--tight">
+                  <input
+                    type="number"
+                    className="cyber-input tabular-nums"
+                    min={1}
+                    max={25}
+                    value={maxDiscoverUrls}
+                    disabled={!useTwoPhase}
+                    onChange={(e) =>
+                      setMaxDiscoverUrls(
+                        Math.min(25, Math.max(1, parseInt(e.target.value, 10) || 12)),
+                      )
+                    }
+                  />
+                </div>
+              </Field>
+            </div>
+          </div>
+
           <Field label="Seed URL (optional)">
             <div className="cyber-input-wrap">
               <input
                 className="cyber-input"
                 value={seedUrl}
                 onChange={(e) => setSeedUrl(e.target.value)}
-                placeholder="leave blank to auto-discover from the open web"
+                placeholder="fallback when discovery returns nothing, or full legacy run when two-phase is off"
               />
             </div>
           </Field>

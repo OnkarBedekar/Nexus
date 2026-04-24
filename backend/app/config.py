@@ -87,6 +87,17 @@ class Settings(BaseSettings):
     min_evidence_sources: int = Field(default=3, validation_alias="MIN_EVIDENCE_SOURCES")
     min_evidence_findings: int = Field(default=4, validation_alias="MIN_EVIDENCE_FINDINGS")
 
+    brave_search_api: str = Field(
+        default="",
+        validation_alias="BRAVE_SEARCH_API",
+        description="Optional Brave Search API key. When set, web discovery uses Brave instead of HTML scraping.",
+    )
+    enable_duckduckgo_discovery: bool = Field(
+        default=True,
+        validation_alias="ENABLE_DUCKDUCKGO_DISCOVERY",
+        description="If true (and no Brave key), use DuckDuckGo HTML for discovery when Brave is not configured.",
+    )
+
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:

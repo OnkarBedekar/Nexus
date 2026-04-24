@@ -25,8 +25,9 @@ from typing import Any
 from urllib.parse import urlparse
 
 from .config import get_settings
+from .discovery import discover_web_urls
 from .entity_hash import entity_id, relationship_id
-from .mock_stream import run_mock_agent
+from .mock_stream import get_mock_script_pages, run_mock_agent
 from .normalization import normalize_paper_record
 from .parsers import paper_to_entity_claims
 from .redis_client import (
@@ -108,6 +109,46 @@ NEXUS_OUTPUT_SCHEMA: dict[str, Any] = {
     "required": ["papers"],
 }
 
+# Tighter schema for per-URL extraction in two-phase mode (faster, less work per run).
+NEXUS_OUTPUT_SCHEMA_BOUNDED: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "papers": {
+            "type": "array",
+            "maxItems": 5,
+            "items": {
+                "type": "object",
+                "properties": {
+                    "title": {"type": "string"},
+                    "authors": {
+                        "type": "array",
+                        "maxItems": 8,
+                        "items": {"type": "string"},
+                    },
+                    "year": {"type": "integer", "nullable": True},
+                    "venue": {"type": "string", "nullable": True},
+                    "doi": {"type": "string", "nullable": True},
+                    "arxivId": {"type": "string", "nullable": True},
+                    "abstract": {"type": "string", "nullable": True},
+                    "methodology": {"type": "string", "nullable": True},
+                    "keyFindings": {"type": "array", "maxItems": 5, "items": {"type": "string"}},
+                    "references": {"type": "array", "maxItems": 2, "items": {"type": "string"}},
+                    "citedBy": {"type": "array", "maxItems": 2, "items": {"type": "string"}},
+                    "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+                },
+                "required": ["title"],
+            },
+        },
+        "textExcerpt": {"type": "string", "nullable": True},
+        "outboundLinks": {
+            "type": "array",
+            "maxItems": 5,
+            "items": {"type": "string"},
+        },
+    },
+    "required": ["papers"],
+}
+
 
 def _build_goal(topic: str) -> str:
     """Natural-language goal for the Agent. Structured output is enforced by `output_schema`."""
@@ -120,6 +161,21 @@ def _build_goal(topic: str) -> str:
         "Citation Chain Traversal: when a paper is found, include up to 5 references and up to 5 "
         "cited-by papers to expand the graph naturally. "
         "Also return textExcerpt and outboundLinks for evidence and next-hop crawling. "
+        "Return JSON matching the provided schema."
+    )
+
+
+def _build_goal_bounded(topic: str, page_url: str) -> str:
+    """Narrow goal for a single source URL: no open-web search, bounded follow-ups."""
+    return (
+        f"Research sub-task for topic: '{topic}'. "
+        f"Start from this page: {page_url}. "
+        "Do not perform a broad or open-ended web search. Work only from this page and at most "
+        "2 follow-up links that are clearly in-domain and linked directly from the page. "
+        "Return at most 3 papers. For each include: title, authors, year, venue, doi or arxivId, "
+        "abstract, methodology summary, and keyFindings. Include at most 2 reference strings and "
+        "2 cited-by strings (titles or identifiers) only if visible on the page. "
+        "Also return textExcerpt and up to 5 outboundLinks from the page for evidence. "
         "Return JSON matching the provided schema."
     )
 
@@ -143,7 +199,12 @@ def _event_type(event: Any) -> str:
 
 
 async def run_live_agent(
-    session_id: str, topic: str, seed_url: str
+    session_id: str,
+    topic: str,
+    seed_url: str,
+    *,
+    goal_mode: str = "broad",
+    mark_session_complete: bool = True,
 ) -> None:  # pragma: no cover - network
     """Stream a real TinyFish run and relay events to Redis.
 
@@ -186,11 +247,13 @@ async def run_live_agent(
         ),
     )
 
-    goal = _build_goal(topic)
+    use_bounded = goal_mode == "bounded"
+    goal = _build_goal_bounded(topic, seed_url) if use_bounded else _build_goal(topic)
+    out_schema = NEXUS_OUTPUT_SCHEMA_BOUNDED if use_bounded else NEXUS_OUTPUT_SCHEMA
     try:
         try:
             stream_ctx = client.agent.stream(
-                url=seed_url, goal=goal, output_schema=NEXUS_OUTPUT_SCHEMA
+                url=seed_url, goal=goal, output_schema=out_schema
             )
         except TypeError:
             # Backward compatibility for SDK versions that don't support output_schema.
@@ -355,10 +418,11 @@ async def run_live_agent(
             ),
         )
     finally:
-        session = await load_session(session_id)
-        if session is not None and session.status != SessionStatus.paused:
-            session.status = SessionStatus.complete
-            await save_session(session)
+        if mark_session_complete:
+            session = await load_session(session_id)
+            if session is not None and session.status != SessionStatus.paused:
+                session.status = SessionStatus.complete
+                await save_session(session)
 
 
 # --- Local ingest helper (used by worker and single-process fallback) ---
@@ -532,11 +596,142 @@ async def _ingest_raw_locally(
             await asyncio.sleep(0.1)
 
 
+# --- Two-phase: discover sources, then agent per URL ---
+
+
+async def _run_two_phase_mock(
+    session_id: str, topic: str, seed_url: str, max_discover: int
+) -> None:
+    """Use catalog pages as 'discovered' URLs, then run the mock script on that subset."""
+    full = get_mock_script_pages(topic)
+    n = min(max(1, max_discover), len(full))
+    sub = full[:n]
+    discovered = [p["url"] for p in sub]
+
+    sess = await load_session(session_id)
+    if sess is not None:
+        sess.activePhase = "discovering"
+        sess.discoveredUrls = []
+        sess.extractionUrlCount = 0
+        await save_session(sess)
+
+    await publish_crawl_log(
+        session_id,
+        CrawlLogEntry(
+            sessionId=session_id,
+            level=LogLevel.info,
+            message="Phase 1: selecting source URLs (mock catalog)",
+        ),
+    )
+    await asyncio.sleep(0.25)
+
+    sess = await load_session(session_id)
+    if sess is not None:
+        sess.discoveredUrls = discovered
+        sess.extractionUrlCount = len(discovered)
+        sess.currentExtractionIndex = 0
+        sess.activePhase = "extracting"
+        await save_session(sess)
+    await publish_crawl_log(
+        session_id,
+        CrawlLogEntry(
+            sessionId=session_id,
+            level=LogLevel.info,
+            message=f"Phase 1 complete: {len(discovered)} URL(s) — starting extraction",
+        ),
+    )
+    if sub:
+        await run_mock_agent(session_id, topic, sub[0]["url"], pages=sub)
+    else:
+        await run_mock_agent(session_id, topic, seed_url)
+    sess = await load_session(session_id)
+    if sess is not None and sess.status != SessionStatus.paused:
+        sess.activePhase = "complete"
+        await save_session(sess)
+
+
+async def _run_two_phase_live(
+    session_id: str, topic: str, seed_fallback: str, max_discover: int
+) -> None:
+    settings = get_settings()
+    sess = await load_session(session_id)
+    if sess is not None:
+        sess.activePhase = "discovering"
+        sess.discoveredUrls = []
+        sess.extractionUrlCount = 0
+        await save_session(sess)
+    await publish_crawl_log(
+        session_id,
+        CrawlLogEntry(
+            sessionId=session_id,
+            level=LogLevel.info,
+            message="Phase 1: searching the web for source URLs",
+        ),
+    )
+    try:
+        items = await discover_web_urls(topic, max_discover, settings=settings)
+    except Exception as exc:  # pragma: no cover - network
+        log.exception("Web discovery failed: %s", exc)
+        items = []
+    urls = [x["url"] for x in items if x.get("url")]
+    if not urls and seed_fallback:
+        urls = [seed_fallback]
+    if not urls:
+        slug = topic.strip().replace(" ", "_")[:80] or "Research"
+        urls = [f"https://en.wikipedia.org/wiki/{slug}"]
+
+    urls = urls[: max(1, min(max_discover, 25))]
+
+    sess = await load_session(session_id)
+    if sess is not None:
+        sess.discoveredUrls = urls
+        sess.extractionUrlCount = len(urls)
+        sess.currentExtractionIndex = 0
+        sess.activePhase = "extracting"
+        await save_session(sess)
+    await publish_crawl_log(
+        session_id,
+        CrawlLogEntry(
+            sessionId=session_id,
+            level=LogLevel.info,
+            message=f"Phase 1 complete: {len(urls)} URL(s) — running bounded extraction per source",
+        ),
+    )
+    n = len(urls)
+    for i, url in enumerate(urls):
+        sess = await load_session(session_id)
+        if sess is not None:
+            sess.currentExtractionIndex = i
+            await save_session(sess)
+        is_last = i == n - 1
+        try:
+            await run_live_agent(
+                session_id,
+                topic,
+                url,
+                goal_mode="bounded",
+                mark_session_complete=is_last,
+            )
+        except Exception:
+            log.exception("Bounded extraction failed for %s", url)
+    sess = await load_session(session_id)
+    if sess is not None and sess.status != SessionStatus.paused:
+        sess.activePhase = "complete"
+        await save_session(sess)
+
+
 # --- Entry point used by the REST route ---
 
 
-async def run_agent_for_session(session_id: str, topic: str, seed_url: str) -> None:
-    """Top-level agent runner. Picks mock vs live based on settings."""
+async def run_agent_for_session(
+    session_id: str,
+    topic: str,
+    seed_url: str,
+    *,
+    use_two_phase: bool = True,
+    max_discover_urls: int = 12,
+) -> None:
+    """Top-level agent runner. Picks mock vs live and optional two-phase mode."""
     settings = get_settings()
     await mark_url_visited(session_id, seed_url)
     await publish_collaborator_event(
@@ -547,8 +742,10 @@ async def run_agent_for_session(session_id: str, topic: str, seed_url: str) -> N
             action="session_started",
         ),
     )
+    n_phase = min(max(1, max_discover_urls), 25)
+    is_mock = settings.mock_tinyfish or not settings.tinyfish_api_key
 
-    if settings.mock_tinyfish or not settings.tinyfish_api_key:
+    if is_mock:
         reason = "MOCK_TINYFISH=1" if settings.mock_tinyfish else "no TINYFISH_API_KEY"
         log.info("Starting MOCK agent run for session %s (%s)", session_id, reason)
         await publish_crawl_log(
@@ -559,9 +756,16 @@ async def run_agent_for_session(session_id: str, topic: str, seed_url: str) -> N
                 message=f"Mock mode active ({reason})",
             ),
         )
-        await run_mock_agent(session_id, topic, seed_url)
+        if use_two_phase:
+            await _run_two_phase_mock(session_id, topic, seed_url, n_phase)
+        else:
+            await run_mock_agent(session_id, topic, seed_url)
+        return
+    if use_two_phase:
+        log.info("Starting LIVE two-phase run for session %s", session_id)
+        await _run_two_phase_live(session_id, topic, seed_url, n_phase)
     else:
-        log.info("Starting LIVE agent run for session %s", session_id)
+        log.info("Starting LIVE single-run agent for session %s", session_id)
         await run_live_agent(session_id, topic, seed_url)
 
 

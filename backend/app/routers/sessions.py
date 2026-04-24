@@ -10,6 +10,7 @@ import asyncio
 import logging
 import uuid
 from typing import Any
+from urllib.parse import urlparse
 
 from fastapi import APIRouter, HTTPException, status
 
@@ -29,6 +30,7 @@ from ..schemas import (
     SessionStats,
     SessionStatus,
     StartSessionRequest,
+    utcnow_iso,
 )
 from ..tinyfish_runner import run_agent_for_session
 
@@ -66,6 +68,8 @@ async def start_session(req: StartSessionRequest) -> ResearchSession:
         stats=SessionStats(),
         seedUrl=seed_url,
         collaborators=req.collaborators,
+        useTwoPhase=req.useTwoPhase,
+        maxDiscoverUrls=req.maxDiscoverUrls,
     )
     await save_session(session)
     if req.rehydrateFromSessionId:
@@ -85,14 +89,35 @@ async def start_session(req: StartSessionRequest) -> ResearchSession:
 
     # Run the agent as a background task so the HTTP response returns immediately.
     # We intentionally don't await the task - FastAPI will keep the event loop alive.
-    asyncio.create_task(_safe_run(session_id, req.topic, seed_url))
+    asyncio.create_task(
+        _safe_run(
+            session_id,
+            req.topic,
+            seed_url,
+            use_two_phase=req.useTwoPhase,
+            max_discover_urls=req.maxDiscoverUrls,
+        )
+    )
 
     return session
 
 
-async def _safe_run(session_id: str, topic: str, seed_url: str) -> None:
+async def _safe_run(
+    session_id: str,
+    topic: str,
+    seed_url: str,
+    *,
+    use_two_phase: bool,
+    max_discover_urls: int,
+) -> None:
     try:
-        await run_agent_for_session(session_id, topic, seed_url)
+        await run_agent_for_session(
+            session_id,
+            topic,
+            seed_url,
+            use_two_phase=use_two_phase,
+            max_discover_urls=max_discover_urls,
+        )
     except Exception:
         log.exception("Background agent task crashed for %s", session_id)
 
@@ -173,3 +198,126 @@ async def get_related_context(session_id: str) -> dict[str, Any]:
         raise HTTPException(status_code=404, detail="Session not found")
     results = await related_session_context(session_id)
     return {"sessionId": session_id, "results": results}
+
+
+@router.get("/{session_id}/final-report")
+async def get_final_report(session_id: str) -> dict[str, Any]:
+    """Build a stable final report from canonical papers for popup download."""
+    session = await load_session(session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    papers = await read_session_papers(session_id)
+    papers.sort(key=_paper_rank, reverse=True)
+    context = await related_session_context(session_id)
+    markdown = _build_markdown_report(session.topic, papers, context)
+
+    # Keep sources deduplicated so the popup can show crawl provenance.
+    source_urls = [p.sourceUrl for p in papers if p.sourceUrl]
+    deduped_sources = sorted(set(source_urls))
+    return {
+        "sessionId": session_id,
+        "generatedAt": utcnow_iso(),
+        "summary": {
+            "topic": session.topic,
+            "paperCount": len(papers),
+            "sourceCount": len(deduped_sources),
+        },
+        "papers": [paper.model_dump(mode="json") for paper in papers[:25]],
+        "sources": [
+            {"url": url, "domain": _domain(url)}
+            for url in deduped_sources[:50]
+        ],
+        "context": context[:8],
+        "markdown": markdown,
+        "isEmpty": len(papers) == 0,
+        "emptyReason": (
+            "No normalized papers are available yet. The agent may have completed, "
+            "but the normalizer worker might still be processing (or not running)."
+            if len(papers) == 0
+            else None
+        ),
+    }
+
+
+def _paper_rank(paper: Any) -> tuple[float, int, int]:
+    """Sort by confidence, findings, and citation chain richness."""
+    confidence = float(getattr(paper, "confidence", 0.0) or 0.0)
+    findings = len(getattr(paper, "keyFindings", []) or [])
+    graph_degree = len(getattr(paper, "references", []) or []) + len(getattr(paper, "citedBy", []) or [])
+    return (confidence, findings, graph_degree)
+
+
+def _build_markdown_report(topic: str, papers: list[Any], context: list[dict[str, Any]]) -> str:
+    lines: list[str] = []
+    lines.append(f"# Final Research Report: {topic}")
+    lines.append("")
+    lines.append(f"Generated from {len(papers)} normalized papers.")
+    lines.append("")
+
+    if not papers:
+        lines.append("## Report status")
+        lines.append(
+            "- No normalized papers are currently available for this session."
+        )
+        lines.append(
+            "- Check that the normalizer worker is running and consuming Redis stream messages."
+        )
+        return "\n".join(lines)
+
+    lines.append("## Key findings")
+    any_finding = False
+    for paper in papers[:8]:
+        for finding in (paper.keyFindings or [])[:2]:
+            any_finding = True
+            lines.append(f"- {finding} _(source: {paper.title})_")
+    if not any_finding:
+        lines.append("- No explicit key findings were extracted.")
+    lines.append("")
+
+    lines.append("## Papers")
+    for paper in papers[:12]:
+        id_bits = []
+        if paper.doi:
+            id_bits.append(f"doi:{paper.doi}")
+        if paper.arxivId:
+            id_bits.append(f"arXiv:{paper.arxivId}")
+        id_suffix = f" ({', '.join(id_bits)})" if id_bits else ""
+        venue_bits = []
+        if paper.venue:
+            venue_bits.append(paper.venue)
+        if paper.year:
+            venue_bits.append(str(paper.year))
+        venue_line = " | ".join(venue_bits) if venue_bits else "Unknown venue/year"
+        lines.append(f"- **{paper.title}**{id_suffix}")
+        lines.append(f"  - Venue: {venue_line}")
+        if paper.authors:
+            lines.append(f"  - Authors: {', '.join(paper.authors[:8])}")
+        if paper.methodology:
+            lines.append(f"  - Methodology: {paper.methodology}")
+        if paper.references:
+            lines.append(f"  - References ({min(5, len(paper.references))}): {', '.join(paper.references[:5])}")
+        if paper.citedBy:
+            lines.append(f"  - Cited by ({min(5, len(paper.citedBy))}): {', '.join(paper.citedBy[:5])}")
+        if paper.sourceUrl:
+            lines.append(f"  - Source URL: {paper.sourceUrl}")
+    lines.append("")
+
+    if context:
+        lines.append("## Related context")
+        for item in context[:5]:
+            title = item.get("title") or item.get("paperId") or "Related context item"
+            lines.append(f"- {title}")
+        lines.append("")
+
+    lines.append("## Notes")
+    lines.append("- This report is generated from canonical paper records in session storage.")
+    lines.append("- If this report is sparse, rerun after the normalizer worker has processed more data.")
+    return "\n".join(lines)
+
+
+def _domain(url: str) -> str:
+    try:
+        return urlparse(url).hostname or url
+    except Exception:
+        return url

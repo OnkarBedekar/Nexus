@@ -55,6 +55,22 @@ export function BottomBar() {
           value={agent?.queueLength ?? 0}
           color="#ffaa00"
         />
+        {session?.useTwoPhase && session?.activePhase && (
+          <span
+            className="text-[9px] tracking-wide font-mono text-cyber-warn max-w-[200px] truncate"
+            title={
+              session.discoveredUrls?.length
+                ? session.discoveredUrls.join(" · ")
+                : undefined
+            }
+          >
+            {session.activePhase === "discovering" && "Phase 1 · discovering URLs"}
+            {session.activePhase === "extracting" &&
+              (session.extractionUrlCount ?? 0) > 0 &&
+              `Phase 2 · source ${(session.currentExtractionIndex ?? 0) + 1}/${session.extractionUrlCount ?? 0}`}
+            {session.activePhase === "complete" && "Two-phase complete"}
+          </span>
+        )}
         <span className="flex items-center gap-1.5">
           <span className="text-cyber-textDim">T+</span>
           <span

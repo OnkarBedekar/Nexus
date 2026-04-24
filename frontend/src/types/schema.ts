@@ -87,6 +87,8 @@ export interface SessionStats {
   elapsedSeconds: number;
 }
 
+export type SessionActivePhase = "discovering" | "extracting" | "complete" | null;
+
 export interface ResearchSession {
   id: string;
   topic: string;
@@ -97,6 +99,13 @@ export interface ResearchSession {
   runId?: string | null;
   streamingUrl?: string | null;
   collaborators: string[];
+  /** When true, backend discovers a bounded list of URLs then runs the agent per source (faster). */
+  useTwoPhase?: boolean;
+  maxDiscoverUrls?: number;
+  activePhase?: SessionActivePhase;
+  discoveredUrls?: string[];
+  currentExtractionIndex?: number;
+  extractionUrlCount?: number;
 }
 
 // --- Subscription payload shapes from Cosmo ---
@@ -122,5 +131,28 @@ export interface SessionCollaboratorEvent {
   collaborator: string;
   action: string;
   updatedAt: string;
+}
+
+export interface FinalReportSource {
+  url: string;
+  domain: string;
+}
+
+export interface FinalReportSummary {
+  topic: string;
+  paperCount: number;
+  sourceCount: number;
+}
+
+export interface FinalReportResponse {
+  sessionId: string;
+  generatedAt: string;
+  summary: FinalReportSummary;
+  papers: Array<Record<string, unknown>>;
+  sources: FinalReportSource[];
+  context: Array<Record<string, unknown>>;
+  markdown: string;
+  isEmpty: boolean;
+  emptyReason?: string | null;
 }
 

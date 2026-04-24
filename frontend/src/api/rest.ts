@@ -1,4 +1,4 @@
-import type { ResearchSession } from "../types/schema";
+import type { FinalReportResponse, ResearchSession } from "../types/schema";
 
 const BACKEND = import.meta.env.VITE_BACKEND_URL ?? "http://localhost:8000";
 
@@ -21,6 +21,8 @@ export async function startSession(params: {
   topic: string;
   seedUrl?: string;
   collaborators?: string[];
+  useTwoPhase?: boolean;
+  maxDiscoverUrls?: number;
 }): Promise<ResearchSession> {
   return json<ResearchSession>(`${BACKEND}/sessions`, {
     method: "POST",
@@ -70,4 +72,8 @@ export async function getRelatedContext(
   id: string,
 ): Promise<{ sessionId: string; results: Array<Record<string, unknown>> }> {
   return json(`${BACKEND}/sessions/${id}/related`);
+}
+
+export async function getFinalReport(id: string): Promise<FinalReportResponse> {
+  return json<FinalReportResponse>(`${BACKEND}/sessions/${id}/final-report`);
 }

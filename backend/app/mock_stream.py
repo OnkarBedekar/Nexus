@@ -18,12 +18,14 @@ from typing import Any
 
 from .entity_hash import entity_id, relationship_id
 from .redis_client import (
+    load_session,
     mark_url_visited,
     publish_agent_status,
     publish_crawl_log,
     publish_edge,
     publish_node,
     publish_timeline_event,
+    save_session,
     set_streaming_url,
 )
 from .schemas import (
@@ -34,6 +36,7 @@ from .schemas import (
     LogLevel,
     Relationship,
     SourceRef,
+    SessionStatus,
     TimelineEvent,
     TimelineEventType,
 )
@@ -198,9 +201,31 @@ def _script_for(topic: str) -> list[dict[str, Any]]:
     return MOCK_CATALOG["AI chip supply chain"]
 
 
-async def run_mock_agent(session_id: str, topic: str, seed_url: str) -> None:
-    """Emit a scripted but realistic sequence of events over ~60-90 seconds."""
-    script = _script_for(topic)
+def get_mock_script_pages(topic: str) -> list[dict[str, Any]]:
+    """Public accessor for the mock multi-page script (used by two-phase mode)."""
+    return _script_for(topic)
+
+
+async def run_mock_agent(
+    session_id: str,
+    topic: str,
+    seed_url: str,
+    *,
+    pages: list[dict[str, Any]] | None = None,
+) -> None:
+    """Emit a scripted but realistic sequence of events over ~60-90 seconds.
+
+    If `pages` is provided, only that subset of the catalog is used (two-phase
+    agent-on-each-URL demo). Otherwise the full topic script runs.
+    """
+    script: list[dict[str, Any]]
+    if pages is not None:
+        script = list(pages) if pages else []
+    else:
+        script = _script_for(topic)
+    if not script:
+        script = [MOCK_CATALOG["AI chip supply chain"][0]]
+    entry_url = script[0]["url"]
     seq = 1
 
     # Prime the UI with a fake "live browser" placeholder. The AgentPanel
@@ -212,7 +237,7 @@ async def run_mock_agent(session_id: str, topic: str, seed_url: str) -> None:
         AgentStatus(
             sessionId=session_id,
             state=AgentState.browsing,
-            currentUrl=seed_url,
+            currentUrl=entry_url,
             pagesVisited=0,
             queueLength=len(script),
             lastAction="Mock: warming up the agent",
@@ -225,7 +250,7 @@ async def run_mock_agent(session_id: str, topic: str, seed_url: str) -> None:
             sequenceNumber=seq,
             type=TimelineEventType.query_started,
             label=f"Research started: {topic}",
-            url=seed_url,
+            url=entry_url,
         ),
     )
     await publish_crawl_log(
@@ -233,7 +258,7 @@ async def run_mock_agent(session_id: str, topic: str, seed_url: str) -> None:
         CrawlLogEntry(
             sessionId=session_id,
             level=LogLevel.info,
-            message=f"Opening seed URL {seed_url}",
+            message=f"Opening seed URL {entry_url}",
         ),
     )
 
@@ -388,7 +413,7 @@ async def run_mock_agent(session_id: str, topic: str, seed_url: str) -> None:
         AgentStatus(
             sessionId=session_id,
             state=AgentState.done,
-            currentUrl=seed_url,
+            currentUrl=entry_url,
             pagesVisited=pages_visited,
             queueLength=0,
             lastAction="Research complete",
@@ -404,3 +429,7 @@ async def run_mock_agent(session_id: str, topic: str, seed_url: str) -> None:
             label="Research complete",
         ),
     )
+    session_obj = await load_session(session_id)
+    if session_obj is not None and session_obj.status != SessionStatus.paused:
+        session_obj.status = SessionStatus.complete
+        await save_session(session_obj)

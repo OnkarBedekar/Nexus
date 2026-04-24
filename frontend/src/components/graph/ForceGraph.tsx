@@ -65,6 +65,36 @@ export function ForceGraph({
   const firstRenderedAtRef = useRef<Map<string, number>>(new Map());
   const edgeFirstRenderedAtRef = useRef<Map<string, number>>(new Map());
 
+  const zoomRootRef = useRef<SVGGElement | null>(null);
+  const zoomTransformRef = useRef<d3.ZoomTransform | null>(null);
+
+  // Pan / zoom: transform the main graph group so the user can navigate dense graphs.
+  useEffect(() => {
+    const svg = svgRef.current;
+    const root = zoomRootRef.current;
+    if (!svg || !root) return;
+
+    const z = d3
+      .zoom<SVGSVGElement, unknown>()
+      .scaleExtent([0.12, 6])
+      .filter((event) => {
+        if (event.type === "wheel" || event.type === "dblclick") return true;
+        const t = event.target as Element | null;
+        if (!t) return true;
+        if (t.closest("g.node")) return false;
+        // Allow pan on background / links; ignore middle / right click
+        return !event.button;
+      })
+      .on("zoom", (event) => {
+        zoomTransformRef.current = event.transform;
+        d3.select(root).attr("transform", event.transform);
+      });
+    d3.select(svg).call(z);
+    return () => {
+      d3.select(svg).on(".zoom", null);
+    };
+  }, []);
+
   // Init sim once.
   useEffect(() => {
     const sim = d3
@@ -225,6 +255,13 @@ export function ForceGraph({
     [edges, nodes],
   );
 
+  // Re-apply pan/zoom after graph markup updates so streaming new nodes do not drop the view.
+  useEffect(() => {
+    const root = zoomRootRef.current;
+    const t = zoomTransformRef.current;
+    if (root && t) d3.select(root).attr("transform", t.toString());
+  }, [nodeList, edgeList]);
+
   // Compute which nodes are on the "active crawl branch".
   const activeNodeIds = useMemo(() => {
     if (!activeUrl) return null;
@@ -312,16 +349,16 @@ export function ForceGraph({
         </pattern>
       </defs>
 
-      {/* Background layers — grid then scanlines. Pointer-events none so
-          they never swallow node clicks. */}
-      <rect
-        width="100%"
-        height="100%"
-        fill="url(#cyber-grid)"
-        pointerEvents="none"
-      />
+      {/* Background + links + nodes: pan on grid/lines; node drag filter skips g.node. */}
+      <g ref={zoomRootRef} className="graph-zoom-layer">
+        <rect
+          width="100%"
+          height="100%"
+          fill="url(#cyber-grid)"
+          className="graph-pan-surface"
+        />
 
-      <g className="links">
+        <g className="links">
         {edgeList.map((e) => {
           const fromNode = nodes.get(e.fromId)!;
           const color = NODE_COLOR[fromNode.type];
@@ -366,9 +403,9 @@ export function ForceGraph({
             </line>
           );
         })}
-      </g>
+        </g>
 
-      <g className="nodes">
+        <g className="nodes">
         {nodeList.map((n) => {
           const r = nodeRadius(n.claims.length);
           const selected = n.id === selectedNodeId;
@@ -538,6 +575,7 @@ export function ForceGraph({
             </g>
           );
         })}
+        </g>
       </g>
     </svg>
   );
