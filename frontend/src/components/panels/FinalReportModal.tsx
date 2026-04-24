@@ -123,7 +123,7 @@ export function FinalReportModal() {
           )}
           {error && <div className="text-[11px] font-mono text-cyber-danger">{error}</div>}
           {!loading && !error && report?.isEmpty && (
-            <div className="space-y-2">
+            <div className="space-y-2 mb-3">
               <div className="font-hud text-[10px] tracking-[0.25em] text-cyber-warn uppercase">
                 Report not ready
               </div>
@@ -133,7 +133,7 @@ export function FinalReportModal() {
               </div>
             </div>
           )}
-          {!loading && !error && report && !report.isEmpty && (
+          {!loading && !error && report?.markdown && (
             <pre className="text-[11px] whitespace-pre-wrap font-mono text-cyber-text leading-relaxed bg-cyber-panelAlt border border-cyber-border p-2.5">
               {report.markdown}
             </pre>

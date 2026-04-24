@@ -48,6 +48,16 @@ def source_priority(url: str) -> int:
     return 0
 
 
+def _key_findings_for_claims(kf: list[str]) -> list[str]:
+    """Repair legacy papers where keyFindings was stored as one char per list element."""
+    if not kf:
+        return []
+    if len(kf) >= 3 and all(isinstance(x, str) and len(x) == 1 for x in kf):
+        merged = "".join(kf).strip()
+        return [merged] if merged else []
+    return [x for x in kf if isinstance(x, str) and x.strip()]
+
+
 def paper_to_entity_claims(paper: CanonicalPaper) -> list[str]:
     claims: list[str] = []
     if paper.venue:
@@ -56,5 +66,5 @@ def paper_to_entity_claims(paper: CanonicalPaper) -> list[str]:
         claims.append(f"Year {paper.year}")
     if paper.methodology:
         claims.append(f"Methodology: {paper.methodology}")
-    claims.extend(paper.keyFindings[:3])
+    claims.extend(_key_findings_for_claims(paper.keyFindings)[:3])
     return claims[:5]

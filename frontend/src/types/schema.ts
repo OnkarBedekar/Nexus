@@ -144,6 +144,13 @@ export interface FinalReportSummary {
   sourceCount: number;
 }
 
+export interface RunIncident {
+  sourceUrl: string;
+  at: string;
+  kind: string;
+  summary: string;
+}
+
 export interface FinalReportResponse {
   sessionId: string;
   generatedAt: string;
@@ -151,6 +158,7 @@ export interface FinalReportResponse {
   papers: Array<Record<string, unknown>>;
   sources: FinalReportSource[];
   context: Array<Record<string, unknown>>;
+  incidents?: RunIncident[];
   markdown: string;
   isEmpty: boolean;
   emptyReason?: string | null;

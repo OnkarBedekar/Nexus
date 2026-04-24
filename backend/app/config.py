@@ -97,6 +97,14 @@ class Settings(BaseSettings):
         validation_alias="ENABLE_DUCKDUCKGO_DISCOVERY",
         description="If true (and no Brave key), use DuckDuckGo HTML for discovery when Brave is not configured.",
     )
+    discovery_exclude_hosts: str = Field(
+        default="",
+        validation_alias="DISCOVERY_EXCLUDE_HOSTS",
+        description=(
+            "Comma-separated hostnames to drop from phase-1 search discovery "
+            "(in addition to built-in exclusions; matches exact host and subdomains)."
+        ),
+    )
 
 
 @lru_cache(maxsize=1)

@@ -18,7 +18,9 @@ interface Props {
 
 export function HomeLanding({ onStarted }: Props) {
   const [topic, setTopic] = useState("AI chip supply chain");
-  const [seedUrl, setSeedUrl] = useState("");
+  const [seedUrl, setSeedUrl] = useState(
+    "https://medium.com/@gaetanlion/the-ai-chips-supply-chain-incredible-fragility-6d6a7197b3c5",
+  );
   const [useTwoPhase, setUseTwoPhase] = useState(true);
   const [maxDiscoverUrls, setMaxDiscoverUrls] = useState(12);
   const [collaborators, setCollaborators] = useState("");

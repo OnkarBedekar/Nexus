@@ -9,6 +9,26 @@ from .parsers import compact_text, parse_year
 from .schemas import CanonicalPaper
 
 
+def _coerce_flexible_string_list(value: Any, *, max_items: int) -> list[str]:
+    """Normalize list fields from TinyFish/JSON: a bare string must not be iterated per-character."""
+    if value is None:
+        return []
+    if isinstance(value, str):
+        s = value.strip()
+        return [s[:4000]] if s else []
+    if isinstance(value, (list, tuple)):
+        out: list[str] = []
+        for x in value:
+            sx = str(x).strip()
+            if sx:
+                out.append(sx[:4000])
+            if len(out) >= max_items:
+                break
+        return out
+    s = str(value).strip()
+    return [s[:4000]] if s else []
+
+
 def normalize_paper_record(record: dict[str, Any], *, source_url: str | None = None) -> CanonicalPaper:
     title = str(record.get("title") or record.get("name") or "Untitled paper").strip()
     authors_raw = record.get("authors") or []
@@ -25,9 +45,11 @@ def normalize_paper_record(record: dict[str, Any], *, source_url: str | None = N
         title=title,
         year=year,
     )
-    findings = record.get("keyFindings") or record.get("claims") or []
-    refs = record.get("references") or []
-    cited_by = record.get("citedBy") or []
+    findings = _coerce_flexible_string_list(
+        record.get("keyFindings") or record.get("claims"), max_items=8
+    )
+    refs = _coerce_flexible_string_list(record.get("references"), max_items=10)
+    cited_by = _coerce_flexible_string_list(record.get("citedBy"), max_items=10)
 
     return CanonicalPaper(
         paperId=paper_id,
@@ -40,9 +62,9 @@ def normalize_paper_record(record: dict[str, Any], *, source_url: str | None = N
         citationCount=record.get("citationCount"),
         abstract=compact_text(record.get("abstract"), 1200),
         methodology=compact_text(record.get("methodology"), 600),
-        keyFindings=[str(x) for x in findings[:8]],
-        references=[str(x) for x in refs[:10]],
-        citedBy=[str(x) for x in cited_by[:10]],
+        keyFindings=findings,
+        references=refs,
+        citedBy=cited_by,
         sourceUrl=source_url or record.get("sourceUrl"),
         confidence=float(record.get("confidence", 0.75)),
     )

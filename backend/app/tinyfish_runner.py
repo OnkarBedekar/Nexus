@@ -19,6 +19,7 @@ TinyFish SDK reference (https://docs.tinyfish.ai/agent-api/reference):
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import random
 from typing import Any
@@ -31,6 +32,7 @@ from .mock_stream import get_mock_script_pages, run_mock_agent
 from .normalization import normalize_paper_record
 from .parsers import paper_to_entity_claims
 from .redis_client import (
+    append_run_incident,
     enqueue_raw_extraction,
     load_session,
     mark_url_visited,
@@ -196,6 +198,92 @@ def _event_type(event: Any) -> str:
     # If it's an Enum, `.value` is the canonical string; else fall through to str(t).
     value = getattr(t, "value", t)
     return str(value).upper()
+
+
+def _coerce_result_dict(value: Any) -> dict[str, Any]:
+    if value is None:
+        return {}
+    if isinstance(value, dict):
+        return value
+    model_dump = getattr(value, "model_dump", None)
+    if callable(model_dump):
+        out = model_dump()
+        return out if isinstance(out, dict) else {}
+    dict_m = getattr(value, "dict", None)
+    if callable(dict_m):
+        out = dict_m()
+        return out if isinstance(out, dict) else {}
+    return {}
+
+
+def _build_run_incident_payload(
+    source_url: str,
+    result: Any,
+    status_ok: bool,
+    event: Any,
+) -> dict[str, Any] | None:
+    """When a sub-run has no storable papers or failed, return a user-facing record."""
+    d = _coerce_result_dict(result)
+    papers = d.get("papers")
+    if not isinstance(papers, list):
+        papers = []
+    if status_ok and len(papers) > 0:
+        return None
+    err = getattr(event, "error", None) or getattr(event, "message", None)
+    if err is not None and not isinstance(err, str):
+        err = str(err)
+    if isinstance(err, str):
+        err = err.strip() or None
+    blob = json.dumps(d, default=str) if d else ""
+    tail = f"{blob} {err or ''}".lower()
+    if not status_ok:
+        kind = "error"
+    elif any(
+        k in tail
+        for k in (
+            "captcha",
+            "cloudflare",
+            "blocked",
+            "anti-bot",
+            "anti bot",
+            "access denied",
+            "forbidden",
+            "bot detection",
+        )
+    ):
+        kind = "blocked"
+    else:
+        kind = "empty"
+    if not status_ok:
+        summary: str
+        if err:
+            summary = err
+        else:
+            summary = (
+                "Sub-run did not report COMPLETED status; no papers were enqueued to the normalizer."
+            )
+    elif kind == "blocked":
+        if "cloudflare" in tail or "captcha" in tail:
+            summary = (
+                "A Cloudflare, CAPTCHA, or similar challenge likely blocked content extraction. "
+                "No extractable academic papers were stored for this URL."
+            )
+        else:
+            summary = (
+                "The target page appears blocked or access-protected. No extractable academic papers were stored for this URL."
+            )
+    else:
+        summary = (
+            "No extractable papers were returned for this URL (the page may be paywalled, non-academic, or blocked by the target site)."
+        )
+    if len(summary) > 2000:
+        summary = summary[:2000] + "…"
+    return {
+        "sourceUrl": source_url,
+        "at": utcnow_iso(),
+        "kind": kind,
+        "summary": summary,
+    }
 
 
 async def run_live_agent(
@@ -368,6 +456,22 @@ async def run_live_agent(
                     status_ok = (
                         str(getattr(event, "status", "COMPLETED")).upper() == "COMPLETED"
                     )
+                    inc = _build_run_incident_payload(seed_url, result, status_ok, event)
+                    if inc:
+                        await append_run_incident(session_id, inc)
+                        await publish_crawl_log(
+                            session_id,
+                            CrawlLogEntry(
+                                sessionId=session_id,
+                                level=(
+                                    LogLevel.error
+                                    if inc["kind"] == "error"
+                                    else LogLevel.warn
+                                ),
+                                message=inc["summary"][:2000],
+                                url=seed_url,
+                            ),
+                        )
                     if result and status_ok:
                         # Redis-native path: enqueue raw extraction for normalizer worker.
                         await enqueue_raw_extraction(session_id, seed_url, result)
@@ -679,6 +783,19 @@ async def _run_two_phase_live(
     if not urls:
         slug = topic.strip().replace(" ", "_")[:80] or "Research"
         urls = [f"https://en.wikipedia.org/wiki/{slug}"]
+
+    # Search hits (e.g. Deloitte/WSJ) are topic-driven; the session seed is not
+    # otherwise used when discovery succeeds. Put the user-chosen (or default)
+    # start URL first so the run actually begins from that page.
+    if seed_fallback:
+        s = (seed_fallback or "").strip()
+        if s:
+            def _norm_url(u: str) -> str:
+                return (u or "").rstrip("/")
+
+            n = _norm_url(s)
+            rest = [u for u in urls if u and _norm_url(u) != n]
+            urls = [s] + rest
 
     urls = urls[: max(1, min(max_discover, 25))]
 

@@ -3,6 +3,10 @@
 Uses Brave Search API when BRAVE_SEARCH_API is set; otherwise scrapes
 DuckDuckGo HTML with httpx. Falls back to seed URLs or Wikipedia if discovery
 yields no usable links.
+
+Search hits are filtered to skip search UIs, plus built-in and env-configured
+hostnames (paywalls / strong anti-bot) that usually block automated research
+agents. Set DISCOVERY_EXCLUDE_HOSTS for extra comma-separated hosts.
 """
 
 from __future__ import annotations
@@ -34,6 +38,14 @@ _DEFAULT_BLOCKLIST: frozenset[str] = frozenset(
     }
 )
 
+# Often gated, paywalled, or heavy anti-bot; poor yields for the TinyFish agent.
+_BUILTIN_RESEARCH_EXCLUSIONS: frozenset[str] = frozenset(
+    {
+        "deloitte.wsj.com",  # WSJ partner property; access commonly denied to bots
+        "bain.com",  # e.g. gated PDF / Cloudflare on insights
+    }
+)
+
 _RESULT_A_RE = re.compile(
     r'class="result__a"[^>]+href="([^"]+)"',
     re.IGNORECASE,
@@ -41,15 +53,42 @@ _RESULT_A_RE = re.compile(
 _UDDG_RE = re.compile(r"uddg=([^&\"]+)")
 
 
-def _host_allowed(url: str) -> bool:
+def _parse_extra_excluded_hosts(raw: str) -> frozenset[str]:
+    return frozenset(
+        p.strip().lower() for p in (raw or "").split(",") if p.strip()
+    )
+
+
+def _host_is_blocked(
+    host: str,
+    *,
+    extra: frozenset[str] | None = None,
+) -> bool:
+    h = (host or "").lower().strip()
+    if not h:
+        return True
+    for bad in _DEFAULT_BLOCKLIST:
+        if h == bad or h.endswith(f".{bad}"):
+            return True
+    for bad in _BUILTIN_RESEARCH_EXCLUSIONS:
+        if h == bad or h.endswith(f".{bad}"):
+            return True
+    if extra:
+        for bad in extra:
+            if h == bad or h.endswith(f".{bad}"):
+                return True
+    return False
+
+
+def _host_allowed(
+    url: str,
+    extra: frozenset[str] | None = None,
+) -> bool:
     try:
         host = (urlparse(url).hostname or "").lower()
         if not host:
             return False
-        for bad in _DEFAULT_BLOCKLIST:
-            if host == bad or host.endswith(f".{bad}"):
-                return False
-        return True
+        return not _host_is_blocked(host, extra=extra)
     except Exception:
         return False
 
@@ -67,10 +106,16 @@ def _normalize_ddg_redirect(url: str) -> str:
 
 
 async def _brave_search(
-    query: str, max_results: int, api_key: str, timeout: float = 20.0
+    query: str,
+    max_results: int,
+    api_key: str,
+    *,
+    extra_excluded: frozenset[str] | None = None,
+    timeout: float = 20.0,
 ) -> list[dict[str, Any]]:
     """Brave Web Search; returns {url, title} dicts."""
     out: list[dict[str, Any]] = []
+    extra = extra_excluded or frozenset()
     async with httpx.AsyncClient(timeout=timeout) as client:
         r = await client.get(
             "https://api.search.brave.com/res/v1/web/search",
@@ -84,7 +129,7 @@ async def _brave_search(
         data = r.json()
         for item in (data.get("web", {}) or {}).get("results", []):
             u = (item or {}).get("url")
-            if not u or not _host_allowed(u):
+            if not u or not _host_allowed(u, extra=extra):
                 continue
             out.append(
                 {
@@ -98,9 +143,14 @@ async def _brave_search(
 
 
 async def _duckduckgo_html(
-    query: str, max_results: int, timeout: float = 25.0
+    query: str,
+    max_results: int,
+    *,
+    extra_excluded: frozenset[str] | None = None,
+    timeout: float = 25.0,
 ) -> list[dict[str, Any]]:
     """Scrape html.duckduckgo.com; returns {url, title} dicts."""
+    extra = extra_excluded or frozenset()
     headers = {
         "User-Agent": (
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -119,14 +169,14 @@ async def _duckduckgo_html(
         text = r.text
     for m in _RESULT_A_RE.finditer(text):
         u = _normalize_ddg_redirect(m.group(1))
-        if u.startswith("http") and _host_allowed(u):
+        if u.startswith("http") and _host_allowed(u, extra=extra):
             out.append({"url": u, "title": None})
             if len(out) >= max_results:
                 return out
     if len(out) < max_results:
         for m in _UDDG_RE.finditer(text):
             u = unquote(m.group(1).replace("+", " "))
-            if u.startswith("http") and _host_allowed(u):
+            if u.startswith("http") and _host_allowed(u, extra=extra):
                 if not any(x["url"] == u for x in out):
                     out.append({"url": u, "title": None})
                 if len(out) >= max_results:
@@ -155,16 +205,19 @@ async def discover_web_urls(
     """Return up to `max_results` {url, title?} for use as agent entry points."""
     s = settings or get_settings()
     n = min(max(1, max_results), 25)
+    extra = _parse_extra_excluded_hosts(s.discovery_exclude_hosts)
     results: list[dict[str, Any]] = []
     if s.brave_search_api:
         try:
-            results = await _brave_search(topic, n, s.brave_search_api)
+            results = await _brave_search(
+                topic, n, s.brave_search_api, extra_excluded=extra
+            )
             log.info("Brave discovery returned %d URLs", len(results))
         except Exception as exc:  # pragma: no cover - network
             log.warning("Brave discovery failed: %s; falling back to DuckDuckGo", exc)
     if not results and s.enable_duckduckgo_discovery:
         try:
-            results = await _duckduckgo_html(topic, n)
+            results = await _duckduckgo_html(topic, n, extra_excluded=extra)
             log.info("DuckDuckGo discovery returned %d URLs", len(results))
         except Exception as exc:  # pragma: no cover - network
             log.warning("DuckDuckGo discovery failed: %s", exc)

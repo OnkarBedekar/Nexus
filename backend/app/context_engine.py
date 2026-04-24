@@ -120,6 +120,13 @@ async def index_context_document(*, session_id: str, paper_id: str, document: st
     settings = get_settings()
     if not settings.redis_vector_enabled:
         return
+    if not settings.embedding_api_key:
+        log.debug(
+            "Vector index skip (paper %s): EMBEDDING_API_KEY is not set; "
+            "semantic search uses text fallback when papers exist",
+            paper_id,
+        )
+        return
     await _ensure_vector_index()
     parsed = json.loads(document)
     content = " ".join(

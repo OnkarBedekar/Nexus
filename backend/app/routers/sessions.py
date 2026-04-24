@@ -19,6 +19,7 @@ from ..redis_client import (
     list_sessions as redis_list_sessions,
     load_session,
     publish_collaborator_event,
+    read_run_incidents,
     read_timeline,
     read_session_papers,
     save_session,
@@ -40,7 +41,7 @@ router = APIRouter(prefix="/sessions", tags=["sessions"])
 
 
 DEFAULT_SEED_URLS: dict[str, str] = {
-    "ai chip supply chain": "https://en.wikipedia.org/wiki/TSMC",
+    "ai chip supply chain": "https://medium.com/@gaetanlion/the-ai-chips-supply-chain-incredible-fragility-6d6a7197b3c5",
     "quantum computing": "https://en.wikipedia.org/wiki/Quantum_computing",
     "carbon capture": "https://en.wikipedia.org/wiki/Carbon_capture_and_storage",
 }
@@ -207,14 +208,38 @@ async def get_final_report(session_id: str) -> dict[str, Any]:
     if session is None:
         raise HTTPException(status_code=404, detail="Session not found")
 
-    papers = await read_session_papers(session_id)
+    papers, incidents, context = await asyncio.gather(
+        read_session_papers(session_id),
+        read_run_incidents(session_id),
+        related_session_context(session_id),
+    )
     papers.sort(key=_paper_rank, reverse=True)
-    context = await related_session_context(session_id)
-    markdown = _build_markdown_report(session.topic, papers, context)
+    markdown = _build_markdown_report(session.topic, papers, context, incidents)
 
     # Keep sources deduplicated so the popup can show crawl provenance.
     source_urls = [p.sourceUrl for p in papers if p.sourceUrl]
     deduped_sources = sorted(set(source_urls))
+    is_empty = len(papers) == 0
+    if is_empty and incidents:
+        unique: list[str] = []
+        seen: set[str] = set()
+        for i in incidents:
+            s = str(i.get("summary", "")).strip()
+            if s and s not in seen:
+                seen.add(s)
+                unique.append(s)
+        empty_reason = (
+            " · ".join(unique[:4])
+            if unique
+            else "No extractable papers were stored; see the report markdown for per-URL details."
+        )
+    elif is_empty:
+        empty_reason = (
+            "No normalized papers are available yet. The agent may have completed, "
+            "but the normalizer worker might still be processing (or not running)."
+        )
+    else:
+        empty_reason = None
     return {
         "sessionId": session_id,
         "generatedAt": utcnow_iso(),
@@ -229,14 +254,10 @@ async def get_final_report(session_id: str) -> dict[str, Any]:
             for url in deduped_sources[:50]
         ],
         "context": context[:8],
+        "incidents": incidents,
         "markdown": markdown,
-        "isEmpty": len(papers) == 0,
-        "emptyReason": (
-            "No normalized papers are available yet. The agent may have completed, "
-            "but the normalizer worker might still be processing (or not running)."
-            if len(papers) == 0
-            else None
-        ),
+        "isEmpty": is_empty,
+        "emptyReason": empty_reason,
     }
 
 
@@ -248,8 +269,14 @@ def _paper_rank(paper: Any) -> tuple[float, int, int]:
     return (confidence, findings, graph_degree)
 
 
-def _build_markdown_report(topic: str, papers: list[Any], context: list[dict[str, Any]]) -> str:
+def _build_markdown_report(
+    topic: str,
+    papers: list[Any],
+    context: list[dict[str, Any]],
+    incidents: list[dict[str, Any]] | None = None,
+) -> str:
     lines: list[str] = []
+    incidents = incidents or []
     lines.append(f"# Final Research Report: {topic}")
     lines.append("")
     lines.append(f"Generated from {len(papers)} normalized papers.")
@@ -257,12 +284,34 @@ def _build_markdown_report(topic: str, papers: list[Any], context: list[dict[str
 
     if not papers:
         lines.append("## Report status")
-        lines.append(
-            "- No normalized papers are currently available for this session."
-        )
-        lines.append(
-            "- Check that the normalizer worker is running and consuming Redis stream messages."
-        )
+        if incidents:
+            lines.append(
+                "- No normalized papers are in session storage, but the agent "
+                "recorded per-URL outcomes below (blocked page, error, or empty extraction)."
+            )
+            lines.append(
+                "- If a source was protected by anti-bot (e.g. Cloudflare) or a CAPTCHA, "
+                "that is a site-level constraint, not a missing normalizer alone."
+            )
+        else:
+            lines.append(
+                "- No normalized papers are currently available for this session."
+            )
+            lines.append(
+                "- Check that the normalizer worker is running and consuming Redis stream messages."
+            )
+        if incidents:
+            lines.append("")
+            lines.append("## Extraction issues")
+            for it in incidents[:50]:
+                u = (it.get("sourceUrl") or "").strip()
+                s = (it.get("summary") or "").strip()
+                k = (it.get("kind") or "empty").strip()
+                head = f"**{k}**" if k else "Issue"
+                if u and s:
+                    lines.append(f"- {head}: {s} — `{u}`")
+                elif s:
+                    lines.append(f"- {head}: {s}")
         return "\n".join(lines)
 
     lines.append("## Key findings")

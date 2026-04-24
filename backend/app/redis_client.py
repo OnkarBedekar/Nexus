@@ -327,6 +327,30 @@ async def list_sessions() -> list[ResearchSession]:
     ]
 
 
+# --- Per-run extraction outcomes (blocked pages, empty results) ---
+
+_MAX_RUN_INCIDENTS = 50
+
+
+async def append_run_incident(session_id: str, payload: dict[str, Any]) -> None:
+    """Append a run outcome; list is FIFO-capped in Redis, TTL matches session key."""
+    key = f"nexus:session:{session_id}:incidents"
+    r = get_redis()
+    await r.rpush(
+        key, json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+    )
+    await r.ltrim(key, -_MAX_RUN_INCIDENTS, -1)
+    await r.expire(key, 24 * 3600)
+
+
+async def read_run_incidents(session_id: str) -> list[dict[str, Any]]:
+    key = f"nexus:session:{session_id}:incidents"
+    raw = await get_redis().lrange(key, 0, -1)
+    if not raw:
+        return []
+    return [json.loads(x) for x in raw]
+
+
 # --- Streaming URL cache (TinyFish live browser preview) ---
 
 
