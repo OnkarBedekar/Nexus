@@ -2,7 +2,7 @@
 
 > Live knowledge-graph research cockpit for the "Ship to Prod - Agentic Engineering" hackathon, San Francisco.
 
-A user types a topic. A **TinyFish** web agent autonomously browses the live web while a React UI renders a D3 force-directed graph that assembles itself node-by-node in real time. **Redis** is the spine: durable extraction pipeline, semantic context, session memory, and realtime fanout. **WunderGraph Cosmo** turns those Redis-backed events into GraphQL subscriptions so every connected client stays in sync without a custom WebSocket service.
+A user types a topic. A **TinyFish** web agent autonomously browses the live web while a React UI renders a D3 force-directed graph that assembles itself node-by-node in real time. **Redis** is the spine: durable extraction pipeline, semantic context, session memory, and realtime fanout. **WunderGraph Cosmo** turns those Redis-backed events into GraphQL subscriptions so every connected client stays in sync without a custom WebSocket service. The **normalizer worker** that drains Redis Streams runs in Docker on **Chainguard** Python images—minimal, digest-pinned bases suited to a sidecar-style consumer.
 
 ---
 
@@ -73,19 +73,31 @@ Operator-level verification commands live in [SPONSOR_USAGE_DETAILED.md](SPONSOR
 
 ---
 
-### Supply-chain and runtime hardening (images we depend on)
+### Chainguard — Python container images for the normalizer worker
 
-| Piece | What we did |
+The stream **normalizer** (`python -m app.workers.normalizer`) is the process that **reads** `nexus:stream:raw_extract` with consumer groups, normalizes payloads, and drives the graph/session updates that Redis and Cosmo expose. We ship that worker as its own Compose service, built on **Chainguard’s** `cgr.dev/chainguard/python` images.
+
+| How we use it | Where |
 | --- | --- |
-| **Pinned digests** | `redis/redis-stack` and `ghcr.io/wundergraph/cosmo/router` use immutable image SHA references in `docker-compose.yml` |
-| **Chainguard-style worker** | Normalizer worker built from `backend/Dockerfile.worker` (`nexus-normalizer-worker:chainguard`), runs **non-root**, **read-only** rootfs, **dropped caps**, **`no-new-privileges`**, tmpfs for `/tmp` |
-| **CI** | Container scanning (e.g. Trivy) in `.github/workflows/container-security.yml` |
+| **Multi-stage image** | Build stage: `python:latest-dev` (install deps into a venv). Runtime stage: **`python:latest`** — slim final image with only the venv + app code | `backend/Dockerfile.worker` |
+| **Digest-pinned `FROM` lines** | Both stages use immutable `@sha256:…` digests so rebuilds are reproducible | Same file |
+| **Compose service** | Image tag `nexus-normalizer-worker:chainguard`, env for stream names / Redis URL | `docker-compose.yml` (`normalizer-worker`) |
+
+**What is unique here**
+
+- **Chainguard images** are designed as small, frequently updated distro bases (Wolfi glibc / minimal tooling) so the worker is not “a full Ubuntu desktop in a box”—it is a tight Python runtime for a single long-running job.
+- **Runtime lock-down in Compose** matches that posture: **non-root** user (`65532`), **read-only** root filesystem, **`cap_drop: ALL`**, **`security_opt: no-new-privileges`**, **`tmpfs`** for `/tmp` only where ephemeral writes are needed.
+
+**Related (not Chainguard)**
+
+- Redis Stack and Cosmo Router images in `docker-compose.yml` are also **pinned by digest** so local stacks pull the same bits every time.
+- **Trivy** scans run in GitHub Actions (`.github/workflows/container-security.yml`) on container artifacts.
 
 ---
 
 ## End-to-end sponsor flow (one paragraph)
 
-`POST /sessions` starts a session → **TinyFish** streams browsing + completion → FastAPI **publishes** to Redis Pub/Sub and **XADD**s raw payloads to a Redis **Stream** → the **normalizer worker** reads the group, builds entities/edges, updates canonical store (and **vectors** when enabled) → more **PUBLISH** events → **Cosmo** maps Redis channels to GraphQL subscriptions → the React app updates the **D3** graph, panels, logs, and final-report inputs in lockstep.
+`POST /sessions` starts a session → **TinyFish** streams browsing + completion → FastAPI **publishes** to Redis Pub/Sub and **XADD**s raw payloads to a Redis **Stream** → the **normalizer worker** (Chainguard-based container) reads the group, builds entities/edges, updates canonical store (and **vectors** when enabled) → more **PUBLISH** events → **Cosmo** maps Redis channels to GraphQL subscriptions → the React app updates the **D3** graph, panels, logs, and final-report inputs in lockstep.
 
 ---
 
@@ -138,6 +150,7 @@ The Cosmo “event-driven subgraph” is **a schema file** with `@edfs__redisSub
 | **TinyFish** | `tinyfish_runner.py`, `mock_stream.py`, `discovery.py` | Live iframe; streaming logs; structured completion enqueued |
 | **Redis** | `redis_client.py`, `workers/normalizer.py`, `context_engine.py` | `MONITOR` / `XLEN` / Pub/Sub activity during a run |
 | **WunderGraph Cosmo** | `router/subgraphs/*.graphql`, `router/config.json`, `frontend/src/api/graphqlClient.ts` | `/graphql` subscriptions firing `nodeAdded`, `collaboratorEvent`, etc. |
+| **Chainguard** | `backend/Dockerfile.worker`, `docker-compose.yml` (`normalizer-worker`) | `docker compose ps`; worker consuming stream (`XINFO GROUPS` / graph updates without FastAPI doing normalization) |
 
 More detailed verification steps: [SPONSOR_USAGE_DETAILED.md](SPONSOR_USAGE_DETAILED.md).
 
